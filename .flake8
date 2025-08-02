@@ -4,26 +4,15 @@ max-line-length = 127
 max-complexity = 10
 
 # Ignore specific error codes
-ignore = 
-    E203,  # whitespace before ':'
-    E501,  # line too long (handled by black)
-    W503,  # line break before binary operator
-    F401,  # imported but unused (handled by isort)
+ignore = E203,E501,W503,F401
 
 # Exclude directories
-exclude = 
-    .git,
-    __pycache__,
-    venv,
-    .pytest_cache,
-    htmlcov,
-    models,
-    .github
+exclude = .git,__pycache__,venv,.pytest_cache,htmlcov,models,.github
 
 # Select specific error codes to check
 select = E,W,F,C
 
 # Per-file ignores
 per-file-ignores =
-    tests/*:F401,F811  # Allow unused imports and redefined names in tests
-    scripts/*:F401     # Allow unused imports in scripts
+    tests/*:F401,F811
+    scripts/*:F401
