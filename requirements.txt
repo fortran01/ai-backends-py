@@ -1,0 +1,18 @@
+# Core application dependencies
+flask
+requests
+onnxruntime
+scikit-learn
+skl2onnx
+numpy
+
+# Testing dependencies
+pytest>=6.0.0
+pytest-mock
+pytest-cov
+pytest-timeout
+playwright>=1.20.0
+pytest-playwright
+
+# Type checking dependencies
+types-requests
