@@ -1,4 +1,4 @@
-# AI Back-End Demo: Python/Flask Project - Phase 1
+# AI Back-End Demo: Python/Flask Project - Phase 2
 
 [![CI/CD Pipeline](https://github.com/your-username/ai-backends-py/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/your-username/ai-backends-py/actions)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
@@ -6,15 +6,15 @@
 [![Tested with pytest](https://img.shields.io/badge/tested%20with-pytest-blue.svg)](https://docs.pytest.org/)
 [![End-to-end tested with Playwright](https://img.shields.io/badge/e2e%20tested%20with-playwright-green.svg)](https://playwright.dev/)
 
-This project demonstrates **Phase 1** of the AI Back-End architecture course, showcasing core concepts of serving AI models in production.
+This project demonstrates **Phase 2** of the AI Back-End architecture course, extending Phase 1 with advanced features including stateful LLM interactions, high-performance gRPC communication, and comprehensive orchestration frameworks.
 
-## 🎯 Phase 1 Objectives
+## 🎯 Phase 2 Objectives
 
-**Goal:** Establish foundational project structure and implement basic, stateless API that serves both a local LLM (TinyLlama) and a traditional ML model in ONNX format.
+**Goal:** Introduce stateful LLM interaction (chat memory), demonstrate gRPC as a high-performance alternative to REST, explore data serialization challenges, and implement Model Context Protocol (MCP) design patterns using LangChain orchestration.
 
 ## 🚀 Features Implemented
 
-### ✅ Completed Tasks
+### ✅ Phase 1 Completed Tasks
 
 1. **Environment Setup** - Python virtual environment with required dependencies
 2. **Model Training & Security Demo** - Iris dataset training with pickle/ONNX comparison  
@@ -23,6 +23,16 @@ This project demonstrates **Phase 1** of the AI Back-End architecture course, sh
 5. **Security Demonstration** - `/api/v1/generate-secure` with prompt injection prevention
 6. **ONNX Model Inference** - `/api/v1/classify` endpoint for iris classification
 7. **Batch Processing** - Offline inference script for bulk prompt processing
+
+### ✅ Phase 2 Completed Tasks
+
+8. **Stateful Chat Endpoint** - `/api/v1/chat` with conversation memory using LangChain
+9. **gRPC Protocol Buffer Service** - High-performance binary communication protocol
+10. **gRPC Server Implementation** - Standalone gRPC server for iris classification
+11. **gRPC Client Integration** - `/api/v1/classify-grpc` endpoint calling gRPC service
+12. **Performance Comparison** - `/api/v1/classify-benchmark` REST vs gRPC timing analysis
+13. **Serialization Challenges** - `/api/v1/classify-detailed` with custom JSON encoders
+14. **Model Context Protocol (MCP)** - Comprehensive conversation memory and orchestration
 
 ### 🔒 Security Features
 
@@ -67,17 +77,22 @@ ollama pull tinyllama
 
 # 6. Start the Flask application
 python app.py
+
+# 7. (Optional) Start the gRPC server in a separate terminal for Phase 2 features
+python grpc_server.py
 ```
 
 ## 📡 API Endpoints
 
-### Health Check
+### Phase 1 Endpoints
+
+#### Health Check
 ```bash
 GET /health
 # Returns service status and dependency health
 ```
 
-### LLM Text Generation (Basic)
+#### LLM Text Generation (Basic)
 ```bash
 POST /api/v1/generate
 Content-Type: application/json
@@ -87,7 +102,7 @@ Content-Type: application/json
 }
 ```
 
-### LLM Text Generation (Secure)
+#### LLM Text Generation (Secure)
 ```bash
 POST /api/v1/generate-secure
 Content-Type: application/json
@@ -110,7 +125,7 @@ Content-Type: application/json
 }
 ```
 
-### Iris Classification
+#### Iris Classification (ONNX)
 ```bash
 POST /api/v1/classify  
 Content-Type: application/json
@@ -129,6 +144,120 @@ Content-Type: application/json
   "probabilities": [0.95, 0.03, 0.02],
   "confidence": 0.95,
   "all_classes": ["setosa", "versicolor", "virginica"]
+}
+```
+
+### Phase 2 Endpoints
+
+#### Stateful Chat with Memory (MCP)
+```bash
+POST /api/v1/chat
+Content-Type: application/json
+
+{
+  "prompt": "Hello, what can you help me with?",
+  "session_id": "user123-session"
+}
+
+# Returns chat response with conversation stats
+{
+  "response": "Hello! I can help you with...",
+  "session_id": "user123-session",
+  "conversation_length": 1,
+  "memory_stats": {
+    "total_messages": 2,
+    "human_messages": 1,
+    "ai_messages": 1
+  }
+}
+```
+
+#### Detailed Classification with Serialization Demo
+```bash
+POST /api/v1/classify-detailed
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# Returns detailed prediction with NumPy arrays (custom JSON encoder)
+{
+  "predicted_class": "setosa",
+  "raw_probabilities": [0.95, 0.03, 0.02],
+  "feature_importances": [0.1, 0.2, 0.3, 0.4],
+  "model_info": {
+    "type": "RandomForestClassifier",
+    "n_estimators": 100
+  },
+  "serialization_demo": {
+    "numpy_int": 42,
+    "numpy_float": 3.14159,
+    "numpy_array": [1, 2, 3, 4, 5]
+  }
+}
+```
+
+#### High-Performance gRPC Classification
+```bash
+POST /api/v1/classify-grpc
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# Returns fast binary protocol classification
+{
+  "predicted_class": "setosa",
+  "predicted_class_index": 0,
+  "probabilities": [0.95, 0.03, 0.02],
+  "confidence": 0.95,
+  "protocol": "gRPC",
+  "processing_time_ms": 12.34
+}
+```
+
+#### Performance Comparison (REST vs gRPC)
+```bash
+POST /api/v1/classify-benchmark
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2,
+  "iterations": 10
+}
+
+# Returns comprehensive performance analysis
+{
+  "results": {
+    "rest": {
+      "predicted_class": "setosa",
+      "protocol": "REST",
+      "avg_processing_time_ms": 45.67
+    },
+    "grpc": {
+      "predicted_class": "setosa", 
+      "protocol": "gRPC",
+      "avg_processing_time_ms": 23.45
+    }
+  },
+  "performance_analysis": {
+    "rest_time_ms": 45.67,
+    "grpc_time_ms": 23.45,
+    "speedup_factor": 1.95,
+    "faster_protocol": "gRPC",
+    "time_difference_ms": 22.22
+  }
 }
 ```
 
@@ -153,8 +282,9 @@ python scripts/batch_inference.py --input sample_prompts.csv --csv --output resu
 
 ```
 ai-backends-py/
-├── app.py                    # Main Flask application
-├── requirements.txt          # Python dependencies
+├── app.py                    # Main Flask application (Phase 1 & 2 endpoints)
+├── grpc_server.py            # Standalone gRPC server for high-performance inference
+├── requirements.txt          # Python dependencies (includes LangChain, gRPC)
 ├── README.md                # This file
 ├── tests/                   # Comprehensive test suite
 │   ├── __init__.py
@@ -164,6 +294,10 @@ ai-backends-py/
 ├── pytest.ini              # Pytest configuration
 ├── run_tests.py            # Test runner script
 ├── venv/                    # Virtual environment
+├── proto/                   # gRPC Protocol Buffer definitions
+│   ├── inference.proto      # Service definition for iris classification
+│   ├── inference_pb2.py     # Generated Python protobuf classes
+│   └── inference_pb2_grpc.py # Generated gRPC service stubs
 ├── models/                  # Trained model files
 │   ├── iris_classifier.onnx # Secure ONNX model
 │   ├── iris_classifier.pkl  # Pickle model (demo only)
@@ -218,6 +352,8 @@ python run_tests.py --type all --coverage --verbose
 ```
 
 ### Manual Testing
+
+#### Phase 1 Tests
 ```bash
 # Health check
 curl http://localhost:5001/health
@@ -233,10 +369,39 @@ curl -X POST http://localhost:5001/api/v1/generate-secure \
   -d '{"prompt": "What is machine learning?"}'
 ```
 
+#### Phase 2 Tests
+```bash
+# Stateful chat test
+curl -X POST http://localhost:5001/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, what can you help me with?", "session_id": "test-session-1"}'
+
+# Follow-up chat test (maintains context)
+curl -X POST http://localhost:5001/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Can you explain that in more detail?", "session_id": "test-session-1"}'
+
+# Detailed classification with serialization demo
+curl -X POST http://localhost:5001/api/v1/classify-detailed \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# gRPC classification (requires gRPC server running)
+curl -X POST http://localhost:5001/api/v1/classify-grpc \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# Performance benchmark (REST vs gRPC)
+curl -X POST http://localhost:5001/api/v1/classify-benchmark \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2, "iterations": 5}'
+```
+
 ## 🎓 Concepts Demonstrated
 
 ### From Module 8 Outline:
 
+#### Phase 1 Concepts:
 - **1.2:** Separation of Concerns (API logic vs. Ollama server vs. ONNX model loading)
 - **1.3:** Online (API endpoints) vs. Offline (batch script) Inference  
 - **2.1:** Model Formats (ONNX vs. pickle security comparison)
@@ -245,6 +410,14 @@ curl -X POST http://localhost:5001/api/v1/generate-secure \
 - **3.3:** Specialized LLM Frameworks (Ollama integration)
 - **5.1:** Input Validation and Security (prompt injection prevention)
 
+#### Phase 2 Concepts:
+- **2.2:** APIs for Inference (REST vs. gRPC performance comparison, binary serialization vs JSON)
+- **3.3:** Specialized Frameworks for LLMs (using Ollama with LangChain orchestration)
+- **4.1:** Model Context Protocol (as a design pattern for stateful conversations)
+- **4.2:** Core Components (Prompt Templates, Conversation Buffer Memory)
+- **4.3:** Orchestration Frameworks (LangChain integration and memory management)
+- **5.2:** Serialization of Complex Data Types (NumPy arrays, custom JSON encoders)
+
 ## ⚠️ Security Warnings
 
 1. **Never load pickle files from untrusted sources** - They can execute arbitrary code
@@ -252,13 +425,13 @@ curl -X POST http://localhost:5001/api/v1/generate-secure \
 3. **Implement prompt injection detection** - Protect against malicious inputs
 4. **Validate all inputs** - Use proper schema validation for API requests
 
-## 🚀 Next Steps (Phase 2)
+## 🚀 Next Steps (Phase 3)
 
 The next phase will introduce:
-- Stateful LLM interactions (chat memory)
-- gRPC communication protocols  
-- Advanced orchestration with LangChain
-- Performance comparisons between protocols
+- Containerization with Docker and Docker Compose
+- Asynchronous task queues with Celery and Redis
+- Production-grade concurrency management
+- Load testing and performance optimization
 
 ## 📚 Dependencies
 
@@ -269,6 +442,13 @@ The next phase will introduce:
 - **scikit-learn** - Machine learning library for training
 - **skl2onnx** - Convert sklearn models to ONNX format
 - **numpy** - Numerical computing library
+
+### Phase 2 Dependencies
+- **langchain** - LLM orchestration and prompt templating framework
+- **langchain-community** - Community integrations for LangChain
+- **grpcio** - gRPC framework for high-performance communication
+- **grpcio-tools** - Protocol Buffers compiler and tools
+- **joblib** - Efficient serialization for scikit-learn models
 
 ### Testing Dependencies
 - **pytest** - Unit and integration testing framework

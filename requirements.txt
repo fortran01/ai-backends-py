@@ -16,3 +16,10 @@ pytest-playwright
 
 # Type checking dependencies
 types-requests
+
+# Phase 2: LangChain and gRPC dependencies
+langchain>=0.1.0
+langchain-community>=0.0.10
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+joblib

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package inference;
+
+// Service definition for AI model inference
+service InferenceService {
+  // Classify iris flowers using the trained model
+  rpc Classify(ClassifyRequest) returns (ClassifyResponse);
+}
+
+// Request message for iris classification
+message ClassifyRequest {
+  float sepal_length = 1;
+  float sepal_width = 2;
+  float petal_length = 3;
+  float petal_width = 4;
+}
+
+// Response message for iris classification
+message ClassifyResponse {
+  string predicted_class = 1;
+  int32 predicted_class_index = 2;
+  repeated float probabilities = 3;
+  float confidence = 4;
+  repeated string all_classes = 5;
+  ClassifyRequest input_features = 6;
+}
