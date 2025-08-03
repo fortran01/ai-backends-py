@@ -125,9 +125,10 @@ class TestGRPCFlaskIntegration:
         
         # Verify performance metrics
         metrics: Dict[str, Any] = data["performance_analysis"]
-        assert "rest_time_ms" in metrics
-        assert isinstance(metrics["rest_time_ms"], (int, float))
-        assert metrics["rest_time_ms"] > 0
+        # New architecture uses http_time_ms instead of rest_time_ms
+        assert "http_time_ms" in metrics
+        assert isinstance(metrics["http_time_ms"], (int, float))
+        assert metrics["http_time_ms"] > 0
         
         if "error" not in grpc_result:
             # gRPC server is available

@@ -414,11 +414,26 @@ def performance_test_data() -> Dict[str, Any]:
         "expected_fields": {
             "rest_result": ["success", "predicted_class"],
             "grpc_result": ["success"],
-            "performance_metrics": ["rest_time_ms", "grpc_time_ms"]
+            "performance_metrics": ["http_time_ms", "grpc_time_ms"]
         },
         "max_acceptable_time_ms": 5000,
         "num_requests_for_average": 5
     }
+
+
+@pytest.fixture(scope="session")
+def http_server_available() -> bool:
+    """
+    Check if HTTP inference server is available for performance comparison testing.
+    
+    Returns:
+        True if HTTP server is running and accessible, False otherwise
+    """
+    try:
+        response = requests.get("http://localhost:5002/health", timeout=5)
+        return response.status_code == 200
+    except (ConnectionError, RequestException):
+        return False
 
 
 @pytest.fixture(scope="session")
