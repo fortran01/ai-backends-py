@@ -324,6 +324,76 @@ class NumpyEncoder(json.JSONEncoder):
         return super(NumpyEncoder, self).default(obj)
 
 
+def call_http_classify(sepal_length: float, sepal_width: float, petal_length: float, petal_width: float) -> Dict[str, Any]:
+    """
+    Call the HTTP inference server for iris classification.
+    
+    Args:
+        sepal_length: Sepal length feature
+        sepal_width: Sepal width feature  
+        petal_length: Petal length feature
+        petal_width: Petal width feature
+        
+    Returns:
+        Dictionary with classification results
+        
+    Raises:
+        Exception: If there's an error calling the HTTP server
+    """
+    try:
+        # HTTP inference server endpoint
+        http_url: str = "http://localhost:5002/classify"
+        
+        # Prepare request data
+        request_data = {
+            "sepal_length": sepal_length,
+            "sepal_width": sepal_width,
+            "petal_length": petal_length,
+            "petal_width": petal_width
+        }
+        
+        # Call HTTP server
+        response = requests.post(
+            http_url,
+            json=request_data,
+            timeout=10,
+            headers={'Content-Type': 'application/json'}
+        )
+        response.raise_for_status()
+        
+        # Parse response
+        result = response.json()
+        
+        # Ensure consistent response format
+        return {
+            "predicted_class": result.get("predicted_class"),
+            "predicted_class_index": result.get("predicted_class_index"),
+            "probabilities": result.get("probabilities", []),
+            "confidence": result.get("confidence"),
+            "all_classes": result.get("class_names", IRIS_CLASSES),
+            "input_features": result.get("input_features", {
+                "sepal_length": sepal_length,
+                "sepal_width": sepal_width,
+                "petal_length": petal_length,
+                "petal_width": petal_width
+            }),
+            "inference_time_ms": result.get("inference_time_ms", 0)
+        }
+            
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"HTTP server connection error: {e}")
+        raise Exception(f"HTTP inference server is unavailable. Please ensure the HTTP server is running on port 5002.")
+    except requests.exceptions.Timeout as e:
+        logger.error(f"HTTP server timeout: {e}")
+        raise Exception(f"HTTP server request timed out: {str(e)}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"HTTP request error: {e}")
+        raise Exception(f"HTTP server communication error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error calling HTTP service: {e}")
+        raise Exception(f"HTTP inference failed: {str(e)}")
+
+
 def call_grpc_classify(sepal_length: float, sepal_width: float, petal_length: float, petal_width: float) -> Dict[str, Any]:
     """
     Call the gRPC inference server for iris classification.
@@ -377,6 +447,87 @@ def call_grpc_classify(sepal_length: float, sepal_width: float, petal_length: fl
     except Exception as e:
         logger.error(f"Error calling gRPC service: {e}")
         raise Exception(f"gRPC communication error: {str(e)}")
+
+
+@app.route('/api/v1/classify-http', methods=['POST'])
+def classify_http() -> Response:
+    """
+    Iris classification using HTTP server for network-based inference.
+    
+    This endpoint demonstrates:
+    - Network-based HTTP/REST communication for fair comparison
+    - JSON serialization over HTTP protocol
+    - Service-to-service communication patterns
+    - HTTP vs gRPC performance comparison baseline
+    
+    Request Body:
+        {
+            "sepal_length": 5.1,
+            "sepal_width": 3.5,
+            "petal_length": 1.4,
+            "petal_width": 0.2
+        }
+        
+    Returns:
+        JSON response with prediction results:
+        {
+            "predicted_class": "setosa",
+            "predicted_class_index": 0,
+            "probabilities": [0.95, 0.03, 0.02],
+            "confidence": 0.95,
+            "protocol": "HTTP"
+        }
+        
+    Raises:
+        400: Missing or invalid input features
+        503: HTTP server unavailable
+        500: HTTP communication error
+    """
+    try:
+        # Validate request data
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        
+        data: Dict[str, Any] = request.get_json()
+        
+        # Validate input features
+        is_valid, error_message, features_array = validate_iris_features(data)
+        if not is_valid:
+            return jsonify({"error": error_message}), 400
+        
+        # Extract features for HTTP call
+        sepal_length = float(data['sepal_length'])
+        sepal_width = float(data['sepal_width'])
+        petal_length = float(data['petal_length'])
+        petal_width = float(data['petal_width'])
+        
+        # Call HTTP service
+        try:
+            start_time = time.time()
+            result = call_http_classify(sepal_length, sepal_width, petal_length, petal_width)
+            processing_time = time.time() - start_time
+            
+            # Add protocol info and timing
+            result["protocol"] = "HTTP"
+            result["processing_time_ms"] = round(processing_time * 1000, 2)
+            
+            logger.info(f"HTTP classification completed in {processing_time*1000:.2f}ms")
+            return jsonify(result)
+            
+        except Exception as e:
+            if "unavailable" in str(e).lower() or "connection" in str(e).lower():
+                logger.error("HTTP inference server unavailable")
+                return jsonify({
+                    "error": "HTTP inference service is unavailable. Please ensure the HTTP server is running on port 5002.",
+                    "hint": "Start the HTTP server with: python http_server.py"
+                }), 503
+            else:
+                logger.error(f"HTTP communication error: {e}")
+                return jsonify({"error": f"HTTP service error: {str(e)}"}), 500
+                
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/classify-http: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route('/api/v1/classify-grpc', methods=['POST'])
@@ -463,10 +614,11 @@ def classify_grpc() -> Response:
 @app.route('/api/v1/classify-benchmark', methods=['POST'])
 def classify_benchmark() -> Response:
     """
-    Performance comparison endpoint: REST vs gRPC classification.
+    Performance comparison endpoint: HTTP/REST vs gRPC classification.
     
     This endpoint demonstrates:
-    - Performance differences between REST and gRPC protocols
+    - Fair performance comparison between HTTP/REST and gRPC protocols
+    - Network-to-network communication for both protocols
     - Timing analysis and protocol comparison
     - Same model inference through different communication protocols
     - Comprehensive performance metrics
@@ -484,14 +636,14 @@ def classify_benchmark() -> Response:
         JSON response with performance comparison:
         {
             "results": {
-                "rest": { prediction results + timing },
+                "rest": { prediction results + timing (via HTTP server) },
                 "grpc": { prediction results + timing }
             },
             "performance_analysis": {
-                "rest_time_ms": 45.67,
+                "http_time_ms": 45.67,
                 "grpc_time_ms": 23.45,
                 "speedup_factor": 1.95,
-                "faster_protocol": "gRPC",
+                "faster_protocol": "gRPC", 
                 "time_difference_ms": 22.22
             }
         }
@@ -527,7 +679,7 @@ def classify_benchmark() -> Response:
         
         results = {}
         
-        # Benchmark REST endpoint (ONNX inference)
+        # Benchmark HTTP/REST endpoint (via HTTP server for fair comparison)
         try:
             rest_times = []
             rest_result = None
@@ -535,24 +687,8 @@ def classify_benchmark() -> Response:
             for i in range(iterations):
                 start_time = time.time()
                 
-                # Call the same logic as the REST endpoint
-                session = get_onnx_session()
-                input_name: str = session.get_inputs()[0].name
-                output_names = [output.name for output in session.get_outputs()]
-                
-                inference_results = session.run(output_names, {input_name: features_array})
-                predicted_class_index: int = int(inference_results[0][0])
-                prob_dict = inference_results[1][0]
-                
-                raw_probabilities: np.ndarray = np.array([
-                    prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
-                ])
-                
-                prob_sum: float = float(np.sum(raw_probabilities))
-                if prob_sum > 0:
-                    normalized_probabilities: np.ndarray = raw_probabilities / prob_sum
-                else:
-                    normalized_probabilities = np.ones_like(raw_probabilities) / len(raw_probabilities)
+                # Call HTTP inference server
+                http_response = call_http_classify(sepal_length, sepal_width, petal_length, petal_width)
                 
                 processing_time = time.time() - start_time
                 rest_times.append(processing_time * 1000)  # Convert to ms
@@ -560,11 +696,11 @@ def classify_benchmark() -> Response:
                 # Store result from first iteration
                 if i == 0:
                     rest_result = {
-                        "predicted_class": IRIS_CLASSES[predicted_class_index],
-                        "predicted_class_index": predicted_class_index,
-                        "probabilities": [float(prob) for prob in normalized_probabilities],
-                        "confidence": float(np.max(normalized_probabilities)),
-                        "protocol": "REST",
+                        "predicted_class": http_response["predicted_class"],
+                        "predicted_class_index": http_response["predicted_class_index"],
+                        "probabilities": http_response["probabilities"],
+                        "confidence": http_response["confidence"],
+                        "protocol": "HTTP",
                         "processing_time_ms": processing_time * 1000
                     }
             
@@ -573,8 +709,8 @@ def classify_benchmark() -> Response:
             results["rest"] = rest_result
             
         except Exception as e:
-            logger.error(f"REST benchmark error: {e}")
-            results["rest"] = {"error": f"REST inference failed: {str(e)}"}
+            logger.error(f"HTTP benchmark error: {e}")
+            results["rest"] = {"error": f"HTTP inference failed: {str(e)}"}
         
         # Benchmark gRPC endpoint
         try:
@@ -605,15 +741,15 @@ def classify_benchmark() -> Response:
         performance_analysis = {}
         
         if "error" not in results["rest"] and "error" not in results["grpc"]:
-            rest_time = results["rest"]["avg_processing_time_ms"]
+            http_time = results["rest"]["avg_processing_time_ms"]
             grpc_time = results["grpc"]["avg_processing_time_ms"]
             
             performance_analysis = {
-                "rest_time_ms": rest_time,
+                "http_time_ms": http_time,
                 "grpc_time_ms": grpc_time,
-                "speedup_factor": round(rest_time / grpc_time, 2) if grpc_time > 0 else "N/A",
-                "faster_protocol": "gRPC" if grpc_time < rest_time else "REST",
-                "time_difference_ms": round(abs(rest_time - grpc_time), 2),
+                "speedup_factor": round(http_time / grpc_time, 2) if grpc_time > 0 else "N/A",
+                "faster_protocol": "gRPC" if grpc_time < http_time else "HTTP",
+                "time_difference_ms": round(abs(http_time - grpc_time), 2),
                 "iterations": iterations
             }
         
@@ -1246,8 +1382,9 @@ if __name__ == '__main__':
     print("   Phase 2:")
     print("   POST /api/v1/chat            - Stateful chat with conversation memory (MCP)")
     print("   POST /api/v1/classify-detailed - Detailed classification with serialization demo")
+    print("   POST /api/v1/classify-http   - Network-based classification via HTTP server")
     print("   POST /api/v1/classify-grpc   - High-performance classification via gRPC")
-    print("   POST /api/v1/classify-benchmark - REST vs gRPC performance comparison")
+    print("   POST /api/v1/classify-benchmark - HTTP vs gRPC fair performance comparison")
     print("🔒 Security features demonstrated:")
     print("   - Prompt injection detection and prevention")
     print("   - ONNX model format for secure inference")
@@ -1259,8 +1396,9 @@ if __name__ == '__main__':
     print("   - Serialization challenges with NumPy arrays")
     print("   - Model Context Protocol (MCP) design pattern")
     print("   - gRPC high-performance binary communication")
-    print("   - Protocol performance comparison (REST vs gRPC)")
-    print("💡 To start gRPC server: python grpc_server.py (in separate terminal)")
+    print("   - Protocol performance comparison (HTTP vs gRPC)")
+    print("💡 To start HTTP server: python http_server.py (port 5002 - in separate terminal)")
+    print("💡 To start gRPC server: python grpc_server.py (port 50051 - in separate terminal)")
     
     # Run Flask development server
     app.run(host='0.0.0.0', port=5001, debug=True)

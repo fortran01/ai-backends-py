@@ -78,7 +78,10 @@ ollama pull tinyllama
 # 6. Start the Flask application
 python app.py
 
-# 7. (Optional) Start the gRPC server in a separate terminal for Phase 2 features
+# 7. (Phase 2) Start the HTTP inference server in a separate terminal
+python http_server.py
+
+# 8. (Phase 2) Start the gRPC server in another separate terminal  
 python grpc_server.py
 ```
 
@@ -201,6 +204,29 @@ Content-Type: application/json
 }
 ```
 
+#### Network-Based HTTP Classification
+```bash
+POST /api/v1/classify-http
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# Returns HTTP server classification via network call
+{
+  "predicted_class": "setosa",
+  "predicted_class_index": 0,
+  "probabilities": [0.95, 0.03, 0.02],
+  "confidence": 0.95,
+  "protocol": "HTTP",
+  "processing_time_ms": 23.45
+}
+```
+
 #### High-Performance gRPC Classification
 ```bash
 POST /api/v1/classify-grpc
@@ -224,7 +250,7 @@ Content-Type: application/json
 }
 ```
 
-#### Performance Comparison (REST vs gRPC)
+#### Performance Comparison (HTTP vs gRPC)
 ```bash
 POST /api/v1/classify-benchmark
 Content-Type: application/json
@@ -242,7 +268,7 @@ Content-Type: application/json
   "results": {
     "rest": {
       "predicted_class": "setosa",
-      "protocol": "REST",
+      "protocol": "HTTP",
       "avg_processing_time_ms": 45.67
     },
     "grpc": {
@@ -252,7 +278,7 @@ Content-Type: application/json
     }
   },
   "performance_analysis": {
-    "rest_time_ms": 45.67,
+    "http_time_ms": 45.67,
     "grpc_time_ms": 23.45,
     "speedup_factor": 1.95,
     "faster_protocol": "gRPC",
@@ -518,3 +544,51 @@ source venv/bin/activate
 # Reinstall dependencies
 pip install -r requirements.txt
 ```
+
+## 🎯 Fair Performance Architecture (2025 Update)
+
+### **Architectural Improvement**
+
+This project now implements a **fair network-to-network comparison** between HTTP/REST and gRPC protocols:
+
+**Previous Architecture (Unfair):**
+- REST: Direct in-process ONNX inference ⚡ (no network overhead)
+- gRPC: Network calls to separate server 🌐 (includes network latency)
+- Result: "Apples to oranges" comparison
+
+**Current Architecture (Fair):**
+- HTTP/REST: Network calls to HTTP inference server 🌐 (port 5002)
+- gRPC: Network calls to gRPC server 🌐 (port 50051)
+- Result: **Fair comparison demonstrating gRPC's true performance advantages**
+
+### **How to Test the Fair Comparison**
+
+```bash
+# Terminal 1: Start main Flask app
+python app.py
+
+# Terminal 2: Start HTTP inference server
+python http_server.py
+
+# Terminal 3: Start gRPC server
+python grpc_server.py
+
+# Test the fair performance comparison
+curl -X POST http://localhost:5001/api/v1/classify-benchmark \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sepal_length": 5.1,
+    "sepal_width": 3.5,
+    "petal_length": 1.4,
+    "petal_width": 0.2,
+    "iterations": 20
+  }'
+```
+
+### **Expected Results**
+
+With the fair architecture, you should now see:
+- **gRPC 1.1x-2x faster**: For small payloads like Iris classification
+- **gRPC 2.5x-10x faster**: For larger payloads, high concurrency, or streaming
+- **HTTP/2 advantages**: Binary Protocol Buffers vs JSON serialization
+- **Educational alignment**: Matches module learning objectives
