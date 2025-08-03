@@ -313,7 +313,37 @@ ai-backends-py/
 
 ### Automated Testing with Pytest/Playwright
 
-The project uses **pytest** for unit/integration testing and **Playwright** for end-to-end testing, following our established coding guidelines.
+The project includes comprehensive test coverage for both Phase 1 and Phase 2 features using **pytest** for unit/integration testing and **Playwright** for end-to-end testing, following our established coding guidelines.
+
+#### Test Structure
+
+```
+tests/
+├── __init__.py                   # Test package initialization
+├── conftest.py                   # Shared pytest fixtures and configuration
+├── run_phase2_tests.py          # Comprehensive test runner for Phase 2
+├── test_api_endpoints.py         # Unit tests for Phase 1 Flask API endpoints
+├── test_phase2_features.py       # Unit tests for Phase 2 features (chat, gRPC, etc.)
+├── test_grpc_server.py          # Unit tests for gRPC server functionality
+├── test_grpc_integration.py     # Integration tests for gRPC client-server communication
+├── test_langchain_memory.py     # Tests for LangChain conversation memory
+├── test_serialization.py        # Tests for NumpyEncoder and serialization utilities
+└── test_e2e_playwright.py       # End-to-end tests using Playwright (Phase 1 & 2)
+```
+
+#### Quick Phase 2 Test Execution
+
+```bash
+# Run all Phase 2 tests with service availability checks
+python tests/run_phase2_tests.py
+
+# This comprehensive test runner will:
+# 1. Check Flask server availability
+# 2. Check gRPC server availability  
+# 3. Check Ollama service availability
+# 4. Run appropriate test suites based on available services
+# 5. Provide detailed status reporting and recommendations
+```
 
 ### GitHub Actions CI/CD Pipeline
 

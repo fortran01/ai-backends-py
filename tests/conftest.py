@@ -250,6 +250,177 @@ def validation_test_cases() -> Dict[str, Dict[str, Any]]:
     }
 
 
+@pytest.fixture
+def phase2_chat_test_cases() -> Dict[str, Dict[str, Any]]:
+    """
+    Fixture providing test cases for Phase 2 chat functionality.
+    
+    Returns:
+        Dictionary mapping test names to chat test data
+    """
+    return {
+        "simple_question": {
+            "prompt": "What is artificial intelligence?",
+            "session_id": "test_session_simple",
+            "should_succeed": True
+        },
+        "conversation_starter": {
+            "prompt": "Hello, my name is Alice and I'm a data scientist.",
+            "session_id": "test_session_conversation",
+            "should_succeed": True
+        },
+        "follow_up_question": {
+            "prompt": "What did I just tell you about myself?",
+            "session_id": "test_session_conversation",
+            "should_succeed": True,
+            "depends_on": "conversation_starter"
+        },
+        "empty_message": {
+            "prompt": "",
+            "session_id": "test_session_empty",
+            "should_succeed": False,
+            "error_contains": "empty"
+        },
+        "missing_prompt": {
+            "session_id": "test_session_missing",
+            "should_succeed": False,
+            "error_contains": "prompt"
+        },
+        "no_session_id": {
+            "prompt": "Test message without session ID",
+            "should_succeed": False,
+            "error_contains": "session_id"
+        }
+    }
+
+
+@pytest.fixture
+def phase2_grpc_test_cases() -> Dict[str, Dict[str, Any]]:
+    """
+    Fixture providing test cases for Phase 2 gRPC functionality.
+    
+    Returns:
+        Dictionary mapping test names to gRPC test data
+    """
+    return {
+        "valid_setosa": {
+            "data": {
+                "sepal_length": 5.1,
+                "sepal_width": 3.5,
+                "petal_length": 1.4,
+                "petal_width": 0.2
+            },
+            "expected_class": "setosa",
+            "should_succeed_if_grpc_available": True
+        },
+        "valid_versicolor": {
+            "data": {
+                "sepal_length": 7.0,
+                "sepal_width": 3.2,
+                "petal_length": 4.7,
+                "petal_width": 1.4
+            },
+            "expected_class": "versicolor",
+            "should_succeed_if_grpc_available": True
+        },
+        "valid_virginica": {
+            "data": {
+                "sepal_length": 6.3,
+                "sepal_width": 3.3,
+                "petal_length": 6.0,
+                "petal_width": 2.5
+            },
+            "expected_class": "virginica",
+            "should_succeed_if_grpc_available": True
+        },
+        "invalid_data_type": {
+            "data": {
+                "sepal_length": "invalid",
+                "sepal_width": 3.5,
+                "petal_length": 1.4,
+                "petal_width": 0.2
+            },
+            "should_succeed_if_grpc_available": False,
+            "error_contains": "numeric"
+        }
+    }
+
+
+@pytest.fixture
+def phase2_serialization_test_cases() -> Dict[str, Dict[str, Any]]:
+    """
+    Fixture providing test cases for Phase 2 serialization functionality.
+    
+    Returns:
+        Dictionary mapping test names to serialization test data
+    """
+    return {
+        "standard_iris": {
+            "data": {
+                "sepal_length": 5.1,
+                "sepal_width": 3.5,
+                "petal_length": 1.4,
+                "petal_width": 0.2
+            },
+            "should_succeed": True,
+            "expected_sections": [
+                "prediction_result",
+                "numpy_arrays",
+                "serialization_challenges"
+            ]
+        },
+        "boundary_values": {
+            "data": {
+                "sepal_length": 0.0,
+                "sepal_width": 10.0,
+                "petal_length": 5.0,
+                "petal_width": 2.5
+            },
+            "should_succeed": True,
+            "expected_sections": [
+                "prediction_result",
+                "numpy_arrays", 
+                "serialization_challenges"
+            ]
+        },
+        "missing_field": {
+            "data": {
+                "sepal_length": 5.1,
+                "sepal_width": 3.5,
+                "petal_length": 1.4
+                # Missing petal_width
+            },
+            "should_succeed": False,
+            "error_contains": "petal_width"
+        }
+    }
+
+
+@pytest.fixture
+def performance_test_data() -> Dict[str, Any]:
+    """
+    Fixture providing test data for performance comparison testing.
+    
+    Returns:
+        Dictionary with performance test configuration
+    """
+    return {
+        "test_data": {
+            "sepal_length": 5.8,
+            "sepal_width": 2.7,
+            "petal_length": 5.1,
+            "petal_width": 1.9
+        },
+        "expected_fields": {
+            "rest_result": ["success", "predicted_class"],
+            "grpc_result": ["success"],
+            "performance_metrics": ["rest_time_ms", "grpc_time_ms"]
+        },
+        "max_acceptable_time_ms": 5000,
+        "num_requests_for_average": 5
+    }
+
+
 @pytest.fixture(scope="session")
 def ollama_available() -> bool:
     """
@@ -309,6 +480,11 @@ def pytest_collection_modifyitems(config, items) -> None:
     """
     # Auto-mark tests based on naming patterns
     for item in items:
+        # Mark unit tests
+        if any(keyword in item.nodeid.lower() for keyword in ["unit", "mock"]) or \
+           any(keyword in item.name.lower() for keyword in ["unit", "mock"]):
+            item.add_marker(pytest.mark.unit)
+        
         # Mark Playwright tests as e2e
         if "playwright" in item.nodeid.lower():
             item.add_marker(pytest.mark.e2e)

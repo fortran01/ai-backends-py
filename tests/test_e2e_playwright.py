@@ -9,6 +9,7 @@ Following the coding guidelines:
 """
 
 import json
+import uuid
 from typing import Dict, Any, List
 import pytest
 from playwright.sync_api import APIRequestContext, APIResponse, Playwright, expect
@@ -376,6 +377,379 @@ class TestAPIWorkflows:
                 assert response.status == 400, f"Should reject {test['name']}"
                 error_data: Dict[str, Any] = response.json()
                 assert "error" in error_data
+
+
+class TestPhase2APIWorkflows:
+    """End-to-end tests for Phase 2 features using Playwright."""
+    
+    @pytest.fixture(scope="class")
+    def api_context(self, playwright: Playwright) -> APIRequestContext:
+        """
+        Create API request context for testing HTTP endpoints.
+        
+        Args:
+            playwright: Playwright instance
+            
+        Returns:
+            APIRequestContext for making HTTP requests
+        """
+        return playwright.request.new_context(
+            base_url=BASE_URL,
+            timeout=API_TIMEOUT
+        )
+    
+    def test_langchain_chat_workflow(self, api_context: APIRequestContext) -> None:
+        """
+        Test complete LangChain chat workflow with conversation memory.
+        
+        Args:
+            api_context: Playwright API request context
+            
+        Raises:
+            AssertionError: If chat workflow fails
+        """
+        session_id: str = f"playwright_chat_session_{uuid.uuid4().hex[:8]}"
+        
+        # Step 1: Start conversation
+        first_message: Dict[str, str] = {
+            "prompt": "Hello, my name is Bob and I work as a software engineer.",
+            "session_id": session_id
+        }
+        
+        try:
+            response1: APIResponse = api_context.post("/api/v1/chat", data=first_message)
+        except Exception as e:
+            if "timeout" in str(e).lower():
+                pytest.skip("Chat request timed out - Ollama may be overloaded")
+            else:
+                raise
+        
+        if response1.status == 200:
+            # Step 2: Verify initial response
+            data1: Dict[str, Any] = response1.json()
+            
+            assert "response" in data1
+            assert "session_id" in data1
+            assert "memory_stats" in data1
+            assert data1["session_id"] == session_id
+            
+            memory1: Dict[str, Any] = data1["memory_stats"]
+            assert memory1["total_messages"] == 2  # Human + AI
+            
+            # Step 3: Ask follow-up question
+            follow_up: Dict[str, str] = {
+                "prompt": "What is my name and profession?",
+                "session_id": session_id
+            }
+            
+            try:
+                response2: APIResponse = api_context.post("/api/v1/chat", data=follow_up)
+            except Exception as e:
+                if "timeout" in str(e).lower():
+                    pytest.skip("Follow-up chat request timed out - Ollama may be overloaded")
+                else:
+                    raise
+            
+            if response2.status == 200:
+                data2: Dict[str, Any] = response2.json()
+                
+                # Step 4: Verify memory persistence
+                assert data2["session_id"] == session_id
+                memory2: Dict[str, Any] = data2["memory_stats"]
+                assert memory2["total_messages"] == 4  # 2 human + 2 AI
+                assert memory2["total_messages"] > memory1["total_messages"]
+                
+            elif response2.status == 500:
+                # Ollama not available - acceptable
+                pass
+            else:
+                pytest.fail(f"Unexpected status for follow-up: {response2.status}")
+                
+        elif response1.status == 500:
+            # Ollama not available - skip this test
+            pytest.skip("Ollama not available for chat workflow testing")
+        else:
+            pytest.fail(f"Unexpected status for initial chat: {response1.status}")
+    
+    def test_grpc_classification_workflow(self, api_context: APIRequestContext) -> None:
+        """
+        Test complete gRPC classification workflow.
+        
+        Args:
+            api_context: Playwright API request context
+            
+        Raises:
+            AssertionError: If gRPC workflow fails
+        """
+        # Test data for different iris types
+        test_cases: List[Dict[str, Any]] = [
+            {
+                "name": "setosa_classification",
+                "data": {
+                    "sepal_length": 5.1,
+                    "sepal_width": 3.5,
+                    "petal_length": 1.4,
+                    "petal_width": 0.2
+                },
+                "expected_class": "setosa"
+            },
+            {
+                "name": "versicolor_classification",
+                "data": {
+                    "sepal_length": 7.0,
+                    "sepal_width": 3.2,
+                    "petal_length": 4.7,
+                    "petal_width": 1.4
+                },
+                "expected_class": "versicolor"
+            }
+        ]
+        
+        for test_case in test_cases:
+            # Step 1: Make gRPC classification request
+            response: APIResponse = api_context.post(
+                "/api/v1/classify-grpc",
+                data=test_case["data"]
+            )
+            
+            if response.status == 200:
+                # Step 2: Verify gRPC response structure
+                data: Dict[str, Any] = response.json()
+                
+                required_fields: List[str] = [
+                    "predicted_class", "predicted_class_index",
+                    "probabilities", "confidence", "all_classes", "input_features"
+                ]
+                for field in required_fields:
+                    assert field in data, f"Missing field {field} in {test_case['name']}"
+                
+                # Step 3: Verify prediction quality
+                assert data["predicted_class"] in ["setosa", "versicolor", "virginica"]
+                assert isinstance(data["confidence"], float)
+                assert 0.0 <= data["confidence"] <= 1.0
+                assert len(data["probabilities"]) == 3
+                
+                # Step 4: Verify input preservation
+                input_features: Dict[str, float] = data["input_features"]
+                for key, value in test_case["data"].items():
+                    assert abs(input_features[key] - value) < 0.001
+                
+            elif response.status == 500:
+                # gRPC server not available - acceptable
+                error_data: Dict[str, Any] = response.json()
+                assert "error" in error_data
+                assert any(keyword in error_data["error"].lower() 
+                          for keyword in ["grpc", "connection", "server"])
+            else:
+                pytest.fail(f"Unexpected status for {test_case['name']}: {response.status}")
+    
+    def test_performance_comparison_workflow(self, api_context: APIRequestContext) -> None:
+        """
+        Test complete performance comparison workflow between REST and gRPC.
+        
+        Args:
+            api_context: Playwright API request context
+            
+        Raises:
+            AssertionError: If performance comparison workflow fails
+        """
+        test_data: Dict[str, float] = {
+            "sepal_length": 5.8,
+            "sepal_width": 2.7,
+            "petal_length": 5.1,
+            "petal_width": 1.9
+        }
+        
+        # Step 1: Make performance comparison request
+        response: APIResponse = api_context.post("/api/v1/classify-benchmark", data=test_data)
+        
+        # Step 2: Verify response status
+        expect(response).to_be_ok()
+        
+        # Step 3: Parse and validate response structure
+        data: Dict[str, Any] = response.json()
+        
+        assert "results" in data
+        assert "performance_analysis" in data
+        
+        # Step 4: Verify REST result (should always work)
+        rest_result: Dict[str, Any] = data["results"]["rest"]
+        assert "predicted_class" in rest_result
+        assert rest_result["predicted_class"] in ["setosa", "versicolor", "virginica"]
+        
+        # Step 5: Verify gRPC result structure
+        grpc_result: Dict[str, Any] = data["results"]["grpc"]
+        # gRPC might have an error if not available
+        
+        # Step 6: Verify performance metrics
+        metrics: Dict[str, Any] = data["performance_analysis"]
+        assert "rest_time_ms" in metrics
+        assert isinstance(metrics["rest_time_ms"], (int, float))
+        assert metrics["rest_time_ms"] > 0
+        
+        if "error" not in grpc_result:
+            # gRPC server is available
+            assert "predicted_class" in grpc_result
+            assert grpc_result["predicted_class"] in ["setosa", "versicolor", "virginica"]
+            assert "grpc_time_ms" in metrics
+            assert isinstance(metrics["grpc_time_ms"], (int, float))
+            assert metrics["grpc_time_ms"] > 0
+            assert "faster_protocol" in metrics
+            
+            # Both should predict the same class for the same input
+            assert rest_result["predicted_class"] == grpc_result["predicted_class"]
+    
+    def test_serialization_demo_workflow(self, api_context: APIRequestContext) -> None:
+        """
+        Test complete serialization demonstration workflow.
+        
+        Args:
+            api_context: Playwright API request context
+            
+        Raises:
+            AssertionError: If serialization workflow fails
+        """
+        test_data: Dict[str, float] = {
+            "sepal_length": 6.2,
+            "sepal_width": 2.9,
+            "petal_length": 4.3,
+            "petal_width": 1.3
+        }
+        
+        # Step 1: Make serialization demo request
+        response: APIResponse = api_context.post("/api/v1/classify-detailed", data=test_data)
+        
+        # Step 2: Verify response status
+        expect(response).to_be_ok()
+        
+        # Step 3: Parse and validate response structure
+        data: Dict[str, Any] = response.json()
+        
+        required_fields: List[str] = [
+            "predicted_class",
+            "predicted_class_index",
+            "raw_probabilities",
+            "serialization_demo"
+        ]
+        for field in required_fields:
+            assert field in data, f"Missing field: {field}"
+        
+        # Step 4: Verify prediction result
+        assert data["predicted_class"] in ["setosa", "versicolor", "virginica"]
+        assert isinstance(data["predicted_class_index"], int)
+        
+        # Step 5: Verify numpy arrays are properly serialized
+        assert isinstance(data["raw_probabilities"], list)
+        assert len(data["raw_probabilities"]) == 3
+        
+        # Step 6: Verify serialization demo
+        demo: Dict[str, Any] = data["serialization_demo"]
+        assert "numpy_int" in demo
+        assert "numpy_float" in demo
+        assert "numpy_bool" in demo
+        assert "numpy_array" in demo
+        
+        # All numpy types should be serialized to native Python types
+        assert isinstance(demo["numpy_int"], int)
+        assert isinstance(demo["numpy_float"], float)
+        assert isinstance(demo["numpy_bool"], bool)
+        assert isinstance(demo["numpy_array"], list)
+    
+    def test_complete_phase2_integration_workflow(self, api_context: APIRequestContext) -> None:
+        """
+        Test complete Phase 2 integration workflow combining multiple features.
+        
+        Args:
+            api_context: Playwright API request context
+            
+        Raises:
+            AssertionError: If integration workflow fails
+        """
+        test_data: Dict[str, float] = {
+            "sepal_length": 5.4,
+            "sepal_width": 3.9,
+            "petal_length": 1.7,
+            "petal_width": 0.4
+        }
+        
+        # Step 1: Test all Phase 2 endpoints in sequence
+        endpoints_to_test: List[Dict[str, str]] = [
+            {"url": "/api/v1/classify", "name": "REST Classification"},
+            {"url": "/api/v1/classify-grpc", "name": "gRPC Classification"},
+            {"url": "/api/v1/classify-benchmark", "name": "Performance Comparison"},
+            {"url": "/api/v1/classify-detailed", "name": "Serialization Demo"}
+        ]
+        
+        results: Dict[str, Dict[str, Any]] = {}
+        
+        for endpoint in endpoints_to_test:
+            response: APIResponse = api_context.post(endpoint["url"], data=test_data)
+            
+            if response.status == 200:
+                data: Dict[str, Any] = response.json()
+                results[endpoint["name"]] = {
+                    "success": True,
+                    "data": data
+                }
+            elif response.status == 500:
+                # Service not available (e.g., Ollama, gRPC server)
+                error_data: Dict[str, Any] = response.json()
+                results[endpoint["name"]] = {
+                    "success": False,
+                    "error": error_data.get("error", "Unknown error")
+                }
+            else:
+                pytest.fail(f"Unexpected status for {endpoint['name']}: {response.status}")
+        
+        # Step 2: Verify at least REST classification works
+        assert results["REST Classification"]["success"] is True
+        rest_data: Dict[str, Any] = results["REST Classification"]["data"]
+        rest_prediction: str = rest_data["predicted_class"]
+        
+        # Step 3: If gRPC classification worked, verify consistency
+        if results["gRPC Classification"]["success"]:
+            grpc_data: Dict[str, Any] = results["gRPC Classification"]["data"]
+            grpc_prediction: str = grpc_data["predicted_class"]
+            assert rest_prediction == grpc_prediction, "REST and gRPC predictions should match"
+        
+        # Step 4: If performance comparison worked, verify it includes REST result
+        if results["Performance Comparison"]["success"]:
+            perf_data: Dict[str, Any] = results["Performance Comparison"]["data"]
+            perf_rest_prediction: str = perf_data["results"]["rest"]["predicted_class"]
+            assert rest_prediction == perf_rest_prediction, "Performance comparison REST result should match"
+        
+        # Step 5: If serialization demo worked, verify it includes prediction
+        if results["Serialization Demo"]["success"]:
+            serial_data: Dict[str, Any] = results["Serialization Demo"]["data"]
+            serial_prediction: str = serial_data["predicted_class"]
+            assert rest_prediction == serial_prediction, "Serialization demo prediction should match"
+        
+        # Step 6: Test chat functionality with context about the classification
+        session_id: str = "integration_test_session"
+        chat_message: Dict[str, str] = {
+            "prompt": f"I just classified an iris flower and got {rest_prediction}. Can you tell me about this type of iris?",
+            "session_id": session_id
+        }
+        
+        chat_response: APIResponse = api_context.post("/api/v1/chat", data=chat_message)
+        
+        if chat_response.status == 200:
+            chat_data: Dict[str, Any] = chat_response.json()
+            assert "response" in chat_data
+            assert "memory_stats" in chat_data
+            assert chat_data["session_id"] == session_id
+        elif chat_response.status == 500:
+            # Ollama not available - acceptable
+            pass
+        
+        # Step 7: Summarize integration test results
+        successful_endpoints: int = sum(1 for result in results.values() if result["success"])
+        total_endpoints: int = len(results)
+        
+        print(f"🔗 Integration Test Summary: {successful_endpoints}/{total_endpoints} endpoints successful")
+        
+        # At least REST classification should work
+        assert successful_endpoints >= 1, "At least one endpoint should be successful"
 
 
 # Pytest configuration for Playwright
