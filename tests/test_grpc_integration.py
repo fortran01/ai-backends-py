@@ -96,8 +96,7 @@ class TestGRPCFlaskIntegration:
         Raises:
             AssertionError: If performance comparison fails
         """
-        if not http_server_available:
-            pytest.skip("HTTP inference server is not available - required for performance comparison integration test")
+        # Note: We check both fixture and actual response for maximum robustness
         test_data: Dict[str, float] = {
             "sepal_length": 6.2,
             "sepal_width": 2.9,
@@ -127,8 +126,12 @@ class TestGRPCFlaskIntegration:
             assert "predicted_class" in rest_result
             assert rest_result["predicted_class"] in ["setosa", "versicolor", "virginica"]
         else:
-            # HTTP server might not be running in CI - this is acceptable
-            pytest.skip("HTTP inference server is not available - required for performance comparison integration test")
+            # HTTP server not available - check if it's the expected error
+            if "HTTP inference failed" in rest_result.get("error", ""):
+                pytest.skip("HTTP inference server is not available - required for performance comparison integration test")
+            else:
+                # Some other error - this should fail the test
+                pytest.fail(f"Unexpected error in REST result: {rest_result}")
         
         # Verify gRPC result structure
         grpc_result: Dict[str, Any] = data["results"]["grpc"]

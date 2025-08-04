@@ -93,6 +93,9 @@ jobs:
       run: |
         mkdir -p models
         python scripts/train_iris_model.py
+        
+        # Also create the improved model for HTTP server compatibility
+        python scripts/train_iris_model_improved.py
 
     - name: Start Flask application
       run: |
@@ -114,6 +117,23 @@ jobs:
         GRPC_SERVER_HOST: localhost
         GRPC_SERVER_PORT: 50051
 
+    - name: Start HTTP inference server for fair performance comparison
+      run: |
+        # Start HTTP inference server in background for network-based comparison
+        echo "🚀 Starting HTTP inference server on port 5002..."
+        python http_server.py &
+        HTTP_SERVER_PID=$!
+        
+        # Wait for HTTP server to be ready
+        timeout 30 bash -c 'until curl -f http://localhost:5002/health; do sleep 2; done'
+        
+        # Verify HTTP inference server is responding
+        curl -f http://localhost:5002/health
+        
+        # Log the process ID for potential debugging
+        echo "HTTP inference server started with PID: $HTTP_SERVER_PID"
+      continue-on-error: true
+
     - name: Start gRPC server (optional)
       run: |
         # Start gRPC server in background if proto files exist
@@ -129,6 +149,42 @@ jobs:
         else
           echo "⚠️  gRPC components not found, skipping gRPC server startup"
         fi
+      continue-on-error: true
+
+    - name: Verify all servers are running
+      run: |
+        echo "🔍 Checking server availability for Phase 2 testing..."
+        
+        # Check Flask app
+        if curl -f http://localhost:5001/health > /dev/null 2>&1; then
+          echo "✅ Flask Server: Available at localhost:5001"
+        else
+          echo "❌ Flask Server: Not available at localhost:5001"
+        fi
+        
+        # Check HTTP inference server  
+        if curl -f http://localhost:5002/health > /dev/null 2>&1; then
+          echo "✅ HTTP Inference Server: Available at localhost:5002"
+        else
+          echo "❌ HTTP Inference Server: Not available at localhost:5002"
+        fi
+        
+        # Check gRPC server
+        if python -c "import grpc; from proto import inference_pb2_grpc, inference_pb2; channel = grpc.insecure_channel('localhost:50051'); stub = inference_pb2_grpc.InferenceServiceStub(channel)" > /dev/null 2>&1; then
+          echo "✅ gRPC Inference Server: Available at localhost:50051"
+        else
+          echo "❌ gRPC Inference Server: Not available at localhost:50051"
+        fi
+        
+        # Check Ollama
+        if curl -f http://localhost:11434/api/tags > /dev/null 2>&1; then
+          echo "✅ Ollama LLM Service: Available at localhost:11434"  
+        else
+          echo "❌ Ollama LLM Service: Not available at localhost:11434"
+        fi
+        
+        echo ""
+        echo "📊 Server Status Summary Complete - Tests will run with graceful degradation for unavailable services"
       continue-on-error: true
 
     - name: Run Phase 2 Flask API Features Tests
@@ -375,8 +431,16 @@ jobs:
       run: |
         mkdir -p models
         python scripts/train_iris_model.py
+        python scripts/train_iris_model_improved.py
         python app.py &
         timeout 60 bash -c 'until curl -f http://localhost:5001/health; do sleep 2; done'
+
+    - name: Start HTTP inference server for integration tests
+      run: |
+        # Start HTTP inference server for fair performance comparison
+        python http_server.py &
+        timeout 30 bash -c 'until curl -f http://localhost:5002/health; do sleep 2; done'
+      continue-on-error: true
 
     - name: Generate Protocol Buffers for integration tests
       run: |
