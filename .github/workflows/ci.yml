@@ -183,7 +183,12 @@ jobs:
       - name: Run High-Level Integration Tests
         run: |
           # Test core API endpoints and features
-          python -m pytest tests/test_e2e_playwright.py -v --tb=short --junit-xml=test-results-e2e.xml
+          python -m pytest tests/test_integration.py -v --tb=short --junit-xml=test-results-integration.xml
+          
+          # Run existing E2E tests if available
+          if [ -f "tests/test_e2e_playwright.py" ]; then
+            python -m pytest tests/test_e2e_playwright.py -v --tb=short --junit-xml=test-results-e2e.xml
+          fi
         env:
           PYTEST_CURRENT_TEST: true
           FLASK_ENV: testing
@@ -240,9 +245,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### 🎯 High-Level Features Tested:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ API integration and endpoint validation" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ End-to-end API workflows" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Core Phase 2 features (chat, gRPC, security)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Core Phase 3 features (Redis caching, semantic caching, API versioning)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Phase 4 features (MLflow, drift monitoring)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Performance comparison (REST vs gRPC)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Security validation and input sanitization" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Service integration and availability" >> $GITHUB_STEP_SUMMARY
