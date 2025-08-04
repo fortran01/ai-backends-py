@@ -1519,7 +1519,6 @@ Response:"""
 
 
 @app.route('/api/v1/classify', methods=['POST'])
-@cache.cached(timeout=300, key_prefix='classify')
 def classify() -> Response:
     """
     Classify iris flowers using the ONNX model.
