@@ -156,3 +156,6 @@ Thumbs.db
 ehthumbs.db
 *.stackdump
 [Dd]esktop.ini
+
+.claude/
+CLAUDE.md

@@ -34,7 +34,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl
+          sudo apt-get install -y curl redis-server
 
       - name: Install Python dependencies
         run: |
@@ -43,6 +43,14 @@ jobs:
 
           # Install gRPC tools for protocol buffer compilation
           pip install grpcio-tools pytest-timeout
+
+      - name: Start Redis service
+        run: |
+          sudo systemctl start redis-server
+          sudo systemctl enable redis-server
+          
+          # Wait for Redis to be ready
+          timeout 30 bash -c 'until redis-cli ping; do sleep 1; done'
 
       - name: Install and setup Ollama
         run: |
@@ -192,6 +200,16 @@ jobs:
           FLASK_ENV: testing
           OLLAMA_HOST: http://localhost:11434
 
+      - name: Run Phase 3 Feature Tests
+        run: |
+          # Test Phase 3 features (Redis caching, semantic caching, API versioning)
+          python -m pytest tests/test_phase3_features.py -v --tb=short --junit-xml=test-results-phase3.xml
+        env:
+          PYTEST_CURRENT_TEST: true
+          FLASK_ENV: testing
+          OLLAMA_HOST: http://localhost:11434
+          REDIS_URL: redis://localhost:6379
+
       - name: Run Security and Performance Tests
         run: |
           # Test security features and performance comparison
@@ -224,6 +242,7 @@ jobs:
           echo "### 🎯 High-Level Features Tested:" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ End-to-end API workflows" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Core Phase 2 features (chat, gRPC, security)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Core Phase 3 features (Redis caching, semantic caching, API versioning)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Performance comparison (REST vs gRPC)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Security validation and input sanitization" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Service integration and availability" >> $GITHUB_STEP_SUMMARY
