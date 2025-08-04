@@ -1,4 +1,4 @@
-# AI Back-End Demo: Python/Flask Project - Phase 2
+# AI Back-End Demo: Python/Flask Project - Phase 3
 
 [![CI/CD Pipeline](https://github.com/your-username/ai-backends-py/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/your-username/ai-backends-py/actions)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
@@ -6,11 +6,11 @@
 [![Tested with pytest](https://img.shields.io/badge/tested%20with-pytest-blue.svg)](https://docs.pytest.org/)
 [![End-to-end tested with Playwright](https://img.shields.io/badge/e2e%20tested%20with-playwright-green.svg)](https://playwright.dev/)
 
-This project demonstrates **Phase 2** of the AI Back-End architecture course, extending Phase 1 with advanced features including stateful LLM interactions, high-performance gRPC communication, and comprehensive orchestration frameworks.
+This project demonstrates **Phase 3** of the AI Back-End architecture course, extending previous phases with advanced production-grade features including intelligent caching strategies and API versioning.
 
-## 🎯 Phase 2 Objectives
+## 🎯 Phase 3 Objectives
 
-**Goal:** Introduce stateful LLM interaction (chat memory), demonstrate gRPC as a high-performance alternative to REST, explore data serialization challenges, and implement Model Context Protocol (MCP) design patterns using LangChain orchestration.
+**Goal:** Implement robust, production-grade features in the APIs including advanced caching strategies (both exact and semantic) and API versioning to demonstrate enterprise-ready infrastructure patterns.
 
 ## 🚀 Features Implemented
 
@@ -34,6 +34,15 @@ This project demonstrates **Phase 2** of the AI Back-End architecture course, ex
 13. **Serialization Challenges** - `/api/v1/classify-detailed` with custom JSON encoders
 14. **Model Context Protocol (MCP)** - Comprehensive conversation memory and orchestration
 
+### ✅ Phase 3 Completed Tasks
+
+15. **Advanced Exact Caching** - Redis-based caching with Flask-Caching for `/api/v1/classify` endpoint
+16. **Semantic Caching Implementation** - FastEmbed-powered semantic similarity caching using `all-MiniLM-L6-v2` model
+17. **Semantic Cache Service** - `/api/v1/chat-semantic` endpoint demonstrating intelligent cache hits for similar prompts
+18. **Cache Analytics** - Comprehensive cache hit/miss statistics, similarity scores, and performance metrics
+19. **API Versioning** - Flask Blueprint-based `/api/v2/generate` endpoint with enhanced metadata and features
+20. **Redis Integration** - Production-ready Redis configuration for both exact and semantic caching
+
 ### 🔒 Security Features
 
 - **Prompt Injection Detection** - Pattern-based detection of malicious prompts
@@ -54,6 +63,7 @@ This project demonstrates **Phase 2** of the AI Back-End architecture course, ex
 1. **Python 3.8+** installed
 2. **Ollama** installed and running
 3. **TinyLlama model** pulled via Ollama
+4. **Redis** installed and running (for Phase 3 caching)
 
 ### Setup Instructions
 
@@ -75,7 +85,10 @@ python scripts/train_iris_model.py
 brew services start ollama  # macOS
 ollama pull tinyllama
 
-# 6. Start the Flask application
+# 6. (Phase 3) Start Redis for caching
+brew services start redis  # macOS
+
+# 7. Start the Flask application
 python app.py
 
 # 7. (Phase 2) Start the HTTP inference server in a separate terminal
@@ -287,6 +300,79 @@ Content-Type: application/json
 }
 ```
 
+### Phase 3 Endpoints
+
+#### Semantic Caching Chat
+```bash
+POST /api/v1/chat-semantic
+Content-Type: application/json
+
+{
+  "prompt": "What is AI?"
+}
+
+# Returns response with cache information
+{
+  "response": "AI (Artificial Intelligence) is...",
+  "cache_info": {
+    "cache_hit": true,
+    "cache_type": "semantic",
+    "similarity_score": 0.92,
+    "response_time_ms": 336.77
+  }
+}
+
+# Test semantic similarity with:
+# - "What is AI?"
+# - "What is artificial intelligence?"
+# - "Explain artificial intelligence to me"
+```
+
+#### API Versioning (v2)
+```bash
+POST /api/v2/generate
+Content-Type: application/json
+
+{
+  "prompt": "Hello, this is a test of API v2",
+  "model_version": "tinyllama"
+}
+
+# Returns enhanced response with metadata
+{
+  "response": "Generated text...",
+  "metadata": {
+    "api_version": "v2",
+    "model_used": "tinyllama",
+    "response_time_ms": 150.23,
+    "token_count": 45,
+    "timestamp": "2025-08-04T00:58:23.697079Z"
+  }
+}
+```
+
+#### Cached Classification (Exact Caching)
+```bash
+POST /api/v1/classify
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# First call: Normal response time
+# Subsequent identical calls: Cached response (much faster)
+{
+  "predicted_class": "setosa",
+  "predicted_class_index": 0,
+  "probabilities": [1.0, 0.0, 0.0],
+  "confidence": 1.0
+}
+```
+
 ## 🔄 Batch Processing
 
 ### Create Sample Files
@@ -453,6 +539,34 @@ curl -X POST http://localhost:5001/api/v1/classify-benchmark \
   -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2, "iterations": 5}'
 ```
 
+#### Phase 3 Tests
+```bash
+# Semantic caching test - first call (cache miss)
+curl -X POST http://localhost:5001/api/v1/chat-semantic \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is AI?"}'
+
+# Semantic caching test - similar prompt (cache hit)
+curl -X POST http://localhost:5001/api/v1/chat-semantic \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is artificial intelligence?"}'
+
+# API versioning test (v2)
+curl -X POST http://localhost:5001/api/v2/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, this is API v2 test"}'
+
+# Exact caching test - first call
+curl -X POST http://localhost:5001/api/v1/classify \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# Exact caching test - same request (cached response)
+curl -X POST http://localhost:5001/api/v1/classify \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+```
+
 ## 🎓 Concepts Demonstrated
 
 ### From Module 8 Outline:
@@ -473,6 +587,10 @@ curl -X POST http://localhost:5001/api/v1/classify-benchmark \
 - **4.2:** Core Components (Prompt Templates, Conversation Buffer Memory)
 - **4.3:** Orchestration Frameworks (LangChain integration and memory management)
 - **5.2:** Serialization of Complex Data Types (NumPy arrays, custom JSON encoders)
+
+#### Phase 3 Concepts:
+- **5.4:** Caching Inferences (both exact and semantic caching with vector embeddings)
+- **6.1:** Versioning and Deployment Strategies (API Versioning with Flask Blueprints)
 
 ## ⚠️ Security Warnings
 
@@ -505,6 +623,12 @@ The next phase will introduce:
 - **grpcio** - gRPC framework for high-performance communication
 - **grpcio-tools** - Protocol Buffers compiler and tools
 - **joblib** - Efficient serialization for scikit-learn models
+
+### Phase 3 Dependencies
+- **Flask-Caching** - Redis-based caching framework for Flask
+- **redis** - Redis client for Python (caching backend)
+- **fastembed** - Fast text embeddings for semantic similarity
+- **hashlib** - Cryptographic hashing for cache keys (built-in)
 
 ### Testing Dependencies
 - **pytest** - Unit and integration testing framework
@@ -543,6 +667,32 @@ source venv/bin/activate
 
 # Reinstall dependencies
 pip install -r requirements.txt
+```
+
+### Redis Connection Issues (Phase 3)
+```bash
+# Check if Redis is running
+redis-cli ping  # Should return PONG
+
+# Start Redis service (macOS)
+brew services start redis
+
+# Check Redis connection
+redis-cli
+> keys *  # List all cached keys
+> flushall  # Clear all cache (if needed)
+```
+
+### Semantic Caching Issues
+```bash
+# Test semantic caching manually
+curl -X POST http://localhost:5001/api/v1/chat-semantic \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is AI?"}'
+
+# Check cache keys in Redis
+redis-cli keys "semantic_cache:*"
+redis-cli keys "embeddings:*"
 ```
 
 ## 🎯 Fair Performance Architecture (2025 Update)

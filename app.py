@@ -25,7 +25,13 @@ import requests
 import onnxruntime as ort
 import grpc
 from concurrent import futures
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, Blueprint
+import redis
+
+# Phase 3: Caching imports
+from flask_caching import Cache
+from fastembed import TextEmbedding
+import hashlib
 
 # LangChain imports for Phase 2
 from langchain.memory import ConversationBufferMemory
@@ -42,10 +48,20 @@ logger = logging.getLogger(__name__)
 
 app: Flask = Flask(__name__)
 
+# Phase 3: Configure Redis-based caching
+app.config['CACHE_TYPE'] = 'RedisCache'
+app.config['CACHE_REDIS_URL'] = 'redis://localhost:6379/0'
+app.config['CACHE_DEFAULT_TIMEOUT'] = 300  # 5 minutes
+
+# Initialize Flask-Caching
+cache: Cache = Cache(app)
+
 # Global variables for model caching and conversation memory
 _onnx_session: Optional[ort.InferenceSession] = None
 _pickle_model: Optional[Any] = None
 _conversation_memories: Dict[str, ConversationBufferMemory] = {}
+_text_embedding_model: Optional[TextEmbedding] = None
+_redis_client: Optional[redis.Redis] = None
 
 # Ollama API configuration
 OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -322,6 +338,205 @@ class NumpyEncoder(json.JSONEncoder):
             # Handle custom objects with __dict__
             return obj.__dict__
         return super(NumpyEncoder, self).default(obj)
+
+
+class SemanticCache:
+    """
+    Phase 3: Semantic caching implementation using FastEmbed and Redis.
+    
+    This class demonstrates advanced caching strategies that go beyond exact string matching
+    by using semantic similarity through embeddings. Similar prompts will hit the cache
+    even if they're worded differently.
+    """
+    
+    def __init__(self, redis_client: redis.Redis, similarity_threshold: float = 0.85) -> None:
+        """
+        Initialize the semantic cache.
+        
+        Args:
+            redis_client: Redis client for cache storage
+            similarity_threshold: Minimum cosine similarity for cache hits (0.0-1.0)
+        """
+        self.redis_client: redis.Redis = redis_client
+        self.similarity_threshold: float = similarity_threshold
+        self.embedding_model: Optional[TextEmbedding] = None
+        self.cache_prefix: str = "semantic_cache:"
+        self.embedding_prefix: str = "embeddings:"
+        
+    def _get_embedding_model(self) -> TextEmbedding:
+        """Get or create the FastEmbed text embedding model."""
+        if self.embedding_model is None:
+            logger.info("Loading FastEmbed all-MiniLM-L6-v2 model for semantic caching")
+            self.embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            logger.info("FastEmbed model loaded successfully")
+        return self.embedding_model
+    
+    def _compute_cosine_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
+        """Compute cosine similarity between two embeddings."""
+        import math
+        
+        # Convert to numpy arrays for easier computation
+        a = np.array(embedding1)
+        b = np.array(embedding2)
+        
+        # Compute cosine similarity
+        dot_product = np.dot(a, b)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+            
+        return float(dot_product / (norm_a * norm_b))
+    
+    def _generate_cache_key(self, prompt: str) -> str:
+        """Generate a hash-based cache key for the prompt."""
+        prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+        return f"{self.cache_prefix}{prompt_hash}"
+    
+    def _get_embedding_key(self, prompt: str) -> str:
+        """Generate an embedding storage key for the prompt."""
+        prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+        return f"{self.embedding_prefix}{prompt_hash}"
+    
+    def get_cached_response(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """
+        Get cached response for semantically similar prompts.
+        
+        Args:
+            prompt: The input prompt to search for
+            
+        Returns:
+            Dict containing cached response and similarity info, or None if no match
+        """
+        try:
+            # First check for exact match
+            exact_key = self._generate_cache_key(prompt)
+            exact_response = self.redis_client.get(exact_key)
+            
+            if exact_response:
+                logger.info(f"Exact cache hit for prompt: {prompt[:50]}...")
+                return {
+                    "response": json.loads(exact_response),
+                    "cache_type": "exact",
+                    "similarity_score": 1.0
+                }
+            
+            # Generate embedding for the input prompt
+            model = self._get_embedding_model()
+            prompt_embedding = list(model.embed([prompt]))[0].tolist()
+            
+            # Search for semantically similar prompts
+            embedding_keys = self.redis_client.keys(f"{self.embedding_prefix}*")
+            best_similarity = 0.0
+            best_match_key = None
+            
+            for embedding_key in embedding_keys:
+                stored_embedding_data = self.redis_client.get(embedding_key)
+                if stored_embedding_data:
+                    stored_data = json.loads(stored_embedding_data)
+                    stored_embedding = stored_data["embedding"]
+                    
+                    similarity = self._compute_cosine_similarity(prompt_embedding, stored_embedding)
+                    
+                    if similarity > best_similarity and similarity >= self.similarity_threshold:
+                        best_similarity = similarity
+                        best_match_key = stored_data["cache_key"]
+            
+            if best_match_key:
+                cached_response = self.redis_client.get(best_match_key)
+                if cached_response:
+                    logger.info(f"Semantic cache hit with similarity {best_similarity:.3f} for prompt: {prompt[:50]}...")
+                    return {
+                        "response": json.loads(cached_response),
+                        "cache_type": "semantic",
+                        "similarity_score": best_similarity
+                    }
+            
+            logger.info(f"Cache miss for prompt: {prompt[:50]}...")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in semantic cache lookup: {e}")
+            return None
+    
+    def store_response(self, prompt: str, response: Dict[str, Any], ttl: int = 300) -> None:
+        """
+        Store response in semantic cache with both exact and embedding keys.
+        
+        Args:
+            prompt: The input prompt
+            response: The response to cache
+            ttl: Time to live in seconds
+        """
+        try:
+            # Store the exact response
+            cache_key = self._generate_cache_key(prompt)
+            self.redis_client.setex(cache_key, ttl, json.dumps(response))
+            
+            # Generate and store the embedding
+            model = self._get_embedding_model()
+            prompt_embedding = list(model.embed([prompt]))[0].tolist()
+            
+            embedding_key = self._get_embedding_key(prompt)
+            embedding_data = {
+                "embedding": prompt_embedding,
+                "cache_key": cache_key,
+                "original_prompt": prompt
+            }
+            self.redis_client.setex(embedding_key, ttl, json.dumps(embedding_data))
+            
+            logger.info(f"Stored response in semantic cache for prompt: {prompt[:50]}...")
+            
+        except Exception as e:
+            logger.error(f"Error storing response in semantic cache: {e}")
+
+
+def get_redis_client() -> redis.Redis:
+    """Get or create Redis client for semantic caching."""
+    global _redis_client
+    
+    if _redis_client is None:
+        try:
+            _redis_client = redis.Redis(host='localhost', port=6379, db=1, decode_responses=True)
+            # Test connection
+            _redis_client.ping()
+            logger.info("Connected to Redis for semantic caching")
+        except redis.ConnectionError:
+            logger.warning("Redis not available for semantic caching - cache will be disabled")
+            _redis_client = None
+    
+    return _redis_client
+
+
+def call_ollama_api(prompt: str) -> str:
+    """
+    Simple Ollama API call for semantic caching demonstration.
+    
+    Args:
+        prompt: The input prompt to send to Ollama
+        
+    Returns:
+        str: The generated response text
+        
+    Raises:
+        requests.RequestException: If the API call fails
+    """
+    ollama_request = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False
+    }
+    
+    response = requests.post(
+        f"{OLLAMA_BASE_URL}/api/generate",
+        json=ollama_request,
+        timeout=30
+    )
+    response.raise_for_status()
+    
+    response_data = response.json()
+    return response_data.get("response", "")
 
 
 def call_http_classify(sepal_length: float, sepal_width: float, petal_length: float, petal_width: float) -> Dict[str, Any]:
@@ -869,6 +1084,124 @@ def chat() -> Response:
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route('/api/v1/chat-semantic', methods=['POST'])
+def chat_semantic() -> Response:
+    """
+    Phase 3: Semantic caching demonstration for LLM chat endpoints.
+    
+    This endpoint demonstrates advanced caching strategies using semantic similarity:
+    - Semantic caching with FastEmbed embeddings
+    - Cosine similarity matching for similar prompts
+    - Cache hit/miss statistics and similarity scores
+    - Redis storage for embeddings and responses
+    
+    Test with semantically similar prompts:
+    - "What is AI?"
+    - "What is artificial intelligence?"
+    - "Explain artificial intelligence to me"
+    
+    Request Body:
+        {
+            "prompt": "Your question here"
+        }
+        
+    Returns:
+        JSON response with cached response info:
+        {
+            "response": "AI assistant response...",
+            "cache_info": {
+                "cache_hit": true/false,
+                "cache_type": "exact"/"semantic"/"none",
+                "similarity_score": 0.95,
+                "response_time_ms": 150
+            }
+        }
+        
+    Raises:
+        400: Missing or invalid prompt
+        500: Ollama API unavailable or caching error
+    """
+    start_time = time.time()
+    
+    try:
+        # Validate request data
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        
+        data: Dict[str, Any] = request.get_json()
+        
+        if 'prompt' not in data:
+            return jsonify({"error": "Missing 'prompt' field in request body"}), 400
+        
+        prompt: str = str(data['prompt']).strip()
+        
+        if not prompt:
+            return jsonify({"error": "Prompt cannot be empty"}), 400
+        
+        logger.info(f"Semantic cache request: {prompt[:100]}...")
+        
+        # Initialize semantic cache
+        redis_client = get_redis_client()
+        cache_info = {
+            "cache_hit": False,
+            "cache_type": "none",
+            "similarity_score": 0.0
+        }
+        
+        if redis_client is None:
+            # No caching available - call Ollama directly
+            logger.warning("Redis not available - bypassing semantic cache")
+            response_text = call_ollama_api(prompt)
+            cache_info["cache_type"] = "disabled"
+        else:
+            semantic_cache = SemanticCache(redis_client, similarity_threshold=0.85)
+            
+            # Check for cached response
+            cached_result = semantic_cache.get_cached_response(prompt)
+            
+            if cached_result:
+                # Cache hit!
+                cache_info["cache_hit"] = True
+                cache_info["cache_type"] = cached_result["cache_type"]
+                cache_info["similarity_score"] = cached_result["similarity_score"]
+                response_text = cached_result["response"]["response"]
+                logger.info(f"Cache hit ({cached_result['cache_type']}) with similarity {cached_result['similarity_score']:.3f}")
+            else:
+                # Cache miss - call Ollama and store result
+                try:
+                    response_text = call_ollama_api(prompt)
+                    
+                    # Store in semantic cache
+                    response_data = {"response": response_text}
+                    semantic_cache.store_response(prompt, response_data, ttl=600)  # 10 minutes TTL
+                    
+                    cache_info["cache_type"] = "miss"
+                    logger.info("Cache miss - stored new response in semantic cache")
+                    
+                except requests.exceptions.ConnectionError:
+                    logger.error("Failed to connect to Ollama API")
+                    return jsonify({"error": "Ollama API is not available. Please ensure Ollama is running."}), 500
+                except requests.exceptions.Timeout:
+                    logger.error("Ollama API request timed out")
+                    return jsonify({"error": "Request timed out"}), 504
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Error calling Ollama API: {e}")
+                    return jsonify({"error": "Failed to communicate with Ollama API"}), 502
+        
+        # Calculate response time
+        response_time_ms = (time.time() - start_time) * 1000
+        cache_info["response_time_ms"] = round(response_time_ms, 2)
+        
+        return jsonify({
+            "response": response_text,
+            "cache_info": cache_info
+        })
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/chat-semantic: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route('/api/v1/classify-detailed', methods=['POST'])
 def classify_detailed() -> Response:
     """
@@ -1186,6 +1519,7 @@ Response:"""
 
 
 @app.route('/api/v1/classify', methods=['POST'])
+@cache.cached(timeout=300, key_prefix='classify')
 def classify() -> Response:
     """
     Classify iris flowers using the ONNX model.
@@ -1362,6 +1696,116 @@ def not_found(error) -> Response:
 def method_not_allowed(error) -> Response:
     """Handle 405 errors with API-appropriate response."""
     return jsonify({"error": "Method not allowed"}), 405
+
+
+# Phase 3: API Versioning with Flask Blueprints
+api_v2 = Blueprint('api_v2', __name__, url_prefix='/api/v2')
+
+@api_v2.route('/generate', methods=['POST'])
+def generate_v2() -> Response:
+    """
+    Phase 3: API Versioning demonstration - Enhanced generation endpoint.
+    
+    This endpoint demonstrates:
+    - API versioning using Flask Blueprints
+    - Enhanced features for new API version
+    - Backward compatibility considerations
+    - Model version management
+    
+    Enhancements in v2:
+    - Additional response metadata
+    - Model version tracking
+    - Enhanced error handling
+    - Performance metrics
+    
+    Request Body:
+        {
+            "prompt": "Your prompt here",
+            "model_version": "tinyllama" (optional)
+        }
+        
+    Returns:
+        JSON response with enhanced metadata:
+        {
+            "response": "Generated text...",
+            "metadata": {
+                "api_version": "v2",
+                "model_used": "tinyllama",
+                "response_time_ms": 150,
+                "token_count": 25,
+                "timestamp": "2025-01-15T10:30:00Z"
+            }
+        }
+    """
+    import datetime
+    start_time = time.time()
+    
+    try:
+        # Validate request data
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        
+        data: Dict[str, Any] = request.get_json()
+        
+        if 'prompt' not in data:
+            return jsonify({"error": "Missing 'prompt' field in request body"}), 400
+        
+        prompt: str = str(data['prompt']).strip()
+        model_version: str = data.get('model_version', OLLAMA_MODEL)
+        
+        if not prompt:
+            return jsonify({"error": "Prompt cannot be empty"}), 400
+        
+        logger.info(f"API v2 generation request: {prompt[:100]}...")
+        
+        # Call Ollama API
+        ollama_request = {
+            "model": model_version,
+            "prompt": prompt,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json=ollama_request,
+                timeout=30
+            )
+            response.raise_for_status()
+            response_data = response.json()
+            generated_text = response_data.get("response", "")
+            
+        except requests.exceptions.ConnectionError:
+            logger.error("Failed to connect to Ollama API")
+            return jsonify({"error": "Ollama API is not available. Please ensure Ollama is running."}), 500
+        except requests.exceptions.Timeout:
+            logger.error("Ollama API request timed out")
+            return jsonify({"error": "Request timed out"}), 504
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error calling Ollama API: {e}")
+            return jsonify({"error": "Failed to communicate with Ollama API"}), 502
+        
+        # Calculate response metrics
+        response_time_ms = (time.time() - start_time) * 1000
+        token_count = len(generated_text.split())  # Rough token approximation
+        
+        return jsonify({
+            "response": generated_text,
+            "metadata": {
+                "api_version": "v2",
+                "model_used": model_version,
+                "response_time_ms": round(response_time_ms, 2),
+                "token_count": token_count,
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v2/generate: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+# Register the v2 API Blueprint
+app.register_blueprint(api_v2)
 
 
 @app.errorhandler(500)

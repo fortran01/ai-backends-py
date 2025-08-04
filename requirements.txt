@@ -23,3 +23,8 @@ langchain-community>=0.0.10
 grpcio>=1.60.0
 grpcio-tools>=1.60.0
 joblib
+
+# Phase 3: Advanced caching dependencies
+Flask-Caching>=2.0.0
+redis>=4.0.0
+fastembed>=0.2.0
