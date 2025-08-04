@@ -1,16 +1,18 @@
-# AI Back-End Demo: Python/Flask Project - Phase 3
+# AI Back-End Demo: Python/Flask Project - Phase 4
 
 [![CI/CD Pipeline](https://github.com/your-username/ai-backends-py/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/your-username/ai-backends-py/actions)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Tested with pytest](https://img.shields.io/badge/tested%20with-pytest-blue.svg)](https://docs.pytest.org/)
 [![End-to-end tested with Playwright](https://img.shields.io/badge/e2e%20tested%20with-playwright-green.svg)](https://playwright.dev/)
+[![MLflow](https://img.shields.io/badge/mlflow-2.9%2B%20%7C%203.x-blue.svg)](https://mlflow.org/)
+[![Evidently AI](https://img.shields.io/badge/evidently-0.4%2B-orange.svg)](https://evidentlyai.com/)
 
-This project demonstrates **Phase 3** of the AI Back-End architecture course, extending previous phases with advanced production-grade features including intelligent caching strategies and API versioning.
+This project demonstrates **Phase 4** of the AI Back-End architecture course, implementing complete production model lifecycle management with advanced drift monitoring and centralized model registries. **Compatible with MLflow 3.x** with modern alias-based model deployment while maintaining backward compatibility with legacy stage-based workflows.
 
-## 🎯 Phase 3 Objectives
+## 🎯 Phase 4 Objectives
 
-**Goal:** Implement robust, production-grade features in the APIs including advanced caching strategies (both exact and semantic) and API versioning to demonstrate enterprise-ready infrastructure patterns.
+**Goal:** Demonstrate a complete model lifecycle workflow using a model registry and implement production-grade monitoring for data and model drift, showcasing enterprise ML operations (MLOps) patterns.
 
 ## 🚀 Features Implemented
 
@@ -43,6 +45,19 @@ This project demonstrates **Phase 3** of the AI Back-End architecture course, ex
 19. **API Versioning** - Flask Blueprint-based `/api/v2/generate` endpoint with enhanced metadata and features
 20. **Redis Integration** - Production-ready Redis configuration for both exact and semantic caching
 
+### ✅ Phase 4 Completed Tasks
+
+21. **Production Logging System** - Automated request/response logging to CSV files for `/api/v1/classify` endpoint
+22. **Reference Dataset Creation** - Iris training dataset stored as reference baseline for drift comparison
+23. **Evidently AI Integration** - Production-grade drift monitoring with statistical tests and visualizations
+24. **Drift Detection Endpoint** - `/api/v1/drift-report` with comprehensive data and prediction drift analysis
+25. **Drift Simulation** - `/api/v1/classify-shifted` endpoint demonstrating systematic bias injection for testing
+26. **MLflow Model Registry** - Centralized model lifecycle management with version control and metadata
+27. **Model Registration** - Enhanced training script with automated MLflow registration for both sklearn and ONNX models
+28. **Registry-Based Inference** - `/api/v1/classify-registry` endpoint loading models programmatically from MLflow
+29. **Model Management CLI** - `scripts/manage_models.py` for model lifecycle operations (staging, promotion, comparison)
+30. **Production Monitoring** - Complete MLOps pipeline with drift detection and model registry integration
+
 ### 🔒 Security Features
 
 - **Prompt Injection Detection** - Pattern-based detection of malicious prompts
@@ -64,6 +79,7 @@ This project demonstrates **Phase 3** of the AI Back-End architecture course, ex
 2. **Ollama** installed and running
 3. **TinyLlama model** pulled via Ollama
 4. **Redis** installed and running (for Phase 3 caching)
+5. **MLflow** server running (for Phase 4 model registry)
 
 ### Setup Instructions
 
@@ -88,13 +104,16 @@ ollama pull tinyllama
 # 6. (Phase 3) Start Redis for caching
 brew services start redis  # macOS
 
-# 7. Start the Flask application
+# 7. (Phase 4) Start MLflow server in a separate terminal
+mlflow server --host 0.0.0.0 --port 5004
+
+# 8. Start the Flask application
 python app.py
 
-# 7. (Phase 2) Start the HTTP inference server in a separate terminal
+# 9. (Phase 2) Start the HTTP inference server in a separate terminal
 python http_server.py
 
-# 8. (Phase 2) Start the gRPC server in another separate terminal  
+# 10. (Phase 2) Start the gRPC server in another separate terminal  
 python grpc_server.py
 ```
 
@@ -373,6 +392,106 @@ Content-Type: application/json
 }
 ```
 
+### Phase 4 Endpoints
+
+#### Drift Monitoring Report
+```bash
+GET /api/v1/drift-report?limit=50
+# Generate comprehensive drift analysis comparing recent production data vs reference
+
+{
+  "drift_analysis": {
+    "drift_detected": true,
+    "overall_drift_score": 0.6234,
+    "feature_drift_scores": {
+      "sepal_length": {
+        "drift_detected": true,
+        "drift_score": 0.8456,
+        "statistical_test": "kolmogorov_smirnov"
+      }
+    },
+    "analysis_timestamp": "2025-08-04T00:58:23.697079Z"
+  },
+  "data_summary": {
+    "reference_samples": 120,
+    "analyzed_samples": 50,
+    "total_production_samples": 150
+  },
+  "recommendations": {
+    "retrain_model": true,
+    "investigate_features": ["sepal_length", "petal_width"],
+    "monitoring_status": "MEDIUM_DRIFT"
+  }
+}
+```
+
+#### Drift Simulation
+```bash
+POST /api/v1/classify-shifted
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# Returns both original and shifted predictions with drift analysis
+{
+  "original_prediction": {
+    "predicted_class": "setosa",
+    "confidence": 0.95
+  },
+  "shifted_prediction": {
+    "predicted_class": "versicolor",
+    "confidence": 0.78
+  },
+  "drift_simulation": {
+    "applied_shifts": {
+      "sepal_length": "+1.5 units",
+      "petal_width": "*1.3 multiplier"
+    },
+    "prediction_changed": true,
+    "confidence_change": -0.17
+  }
+}
+```
+
+#### Model Registry Classification
+```bash
+# Modern approach using aliases (MLflow 3.x recommended)
+POST /api/v1/classify-registry?model_format=sklearn&alias=production
+Content-Type: application/json
+
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
+
+# Returns prediction with model registry metadata including alias
+{
+  "predicted_class": "setosa",
+  "predicted_class_index": 0,
+  "probabilities": [0.8, 0.1, 0.1],
+  "confidence": 0.8,
+  "model_registry_info": {
+    "model_name": "iris-classifier-sklearn",
+    "model_format": "sklearn",
+    "model_version": "1",
+    "model_stage": "None",
+    "model_alias": "production",
+    "model_uri": "models:/iris-classifier-sklearn@production",
+    "mlflow_tracking_uri": "http://localhost:5004"
+  }
+}
+
+# Legacy approach using stages (still supported but deprecated)
+POST /api/v1/classify-registry?model_format=sklearn&stage=Production
+```
+
 ## 🔄 Batch Processing
 
 ### Create Sample Files
@@ -419,6 +538,96 @@ ai-backends-py/
 │   └── batch_inference.py   # Batch processing script
 ├── sample_prompts.txt       # Sample text input
 └── sample_prompts.csv       # Sample CSV input
+```
+
+## 🗃️ MLflow Model Registry Management
+
+### Model Registration & Training
+```bash
+# Train models and register with MLflow (includes both sklearn and ONNX formats)
+python scripts/train_iris_model.py
+
+# This will:
+# 1. Train RandomForestClassifier on Iris dataset  
+# 2. Log metrics, parameters, and metadata to MLflow
+# 3. Register both sklearn and ONNX models in the registry
+# 4. Demonstrate security differences between pickle and ONNX formats
+```
+
+### Model Management CLI
+```bash
+# List all registered models with versions, stages, and aliases
+python scripts/manage_models.py --list
+
+# Compare performance across model versions
+python scripts/manage_models.py --compare iris-classifier-sklearn
+
+# Set aliases for model versions (MLflow 3.x recommended approach)
+python scripts/manage_models.py --alias iris-classifier-sklearn 1 staging
+python scripts/manage_models.py --alias iris-classifier-sklearn 1 production
+python scripts/manage_models.py --alias iris-classifier-sklearn 1 champion
+
+# Show detailed model lineage and metadata
+python scripts/manage_models.py --lineage iris-classifier-sklearn 1
+
+# Legacy stage transitions (deprecated in MLflow 3.x - use aliases instead)
+python scripts/manage_models.py --transition iris-classifier-sklearn 1 Staging
+python scripts/manage_models.py --transition iris-classifier-sklearn 1 Production
+```
+
+### MLflow UI Access
+```bash
+# Access MLflow UI at: http://localhost:5004
+# - View experiments and runs
+# - Browse model registry
+# - Compare model performance
+# - Manage model stages and aliases
+```
+
+### MLflow 3.x Compatibility Notes
+
+This project is compatible with MLflow 3.x, which introduces important changes:
+
+- **Model Stages Deprecated**: Traditional stages (None, Staging, Production, Archived) are deprecated in favor of **aliases**
+- **Recommended Approach**: Use aliases like `staging`, `production`, `champion` for model deployment
+- **Backward Compatibility**: Stage-based commands still work but map to aliases internally
+- **Migration Path**: Update your workflows to use `--alias` instead of `--transition` commands
+
+```bash
+# ✅ Modern MLflow 3.x approach (recommended)
+python scripts/manage_models.py --alias iris-classifier-sklearn 1 production
+
+# ⚠️ Legacy approach (deprecated but still works)
+python scripts/manage_models.py --transition iris-classifier-sklearn 1 Production
+```
+
+### Production Monitoring Workflow
+```bash
+# 1. Start with some classification requests to generate production data
+curl -X POST http://localhost:5001/api/v1/classify \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# 2. Simulate drift to trigger monitoring alerts
+curl -X POST http://localhost:5001/api/v1/classify-shifted \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# 3. Generate drift analysis report
+curl -X GET "http://localhost:5001/api/v1/drift-report?limit=50"
+
+# 4. View HTML drift report (generated at data/drift_report.html)
+open data/drift_report.html  # macOS
+
+# 5. Use registry-based inference with model aliases (modern approach)
+curl -X POST "http://localhost:5001/api/v1/classify-registry?model_format=sklearn&alias=production" \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# Alternative: Use staging alias for testing
+curl -X POST "http://localhost:5001/api/v1/classify-registry?model_format=sklearn&alias=staging" \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
 ```
 
 ## 🧪 Testing & CI/CD

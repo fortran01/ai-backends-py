@@ -15,15 +15,21 @@ Following the coding guidelines:
 
 import pickle
 import os
-from typing import Tuple, Any
+import datetime
+from typing import Tuple, Any, Dict
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, f1_score
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 import warnings
+
+# Phase 4: MLflow imports for model registry
+import mlflow
+import mlflow.sklearn
+import mlflow.onnx
 
 
 def load_and_prepare_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -79,23 +85,43 @@ def train_model(X_train: np.ndarray, y_train: np.ndarray) -> RandomForestClassif
     return model
 
 
-def evaluate_model(model: RandomForestClassifier, X_test: np.ndarray, y_test: np.ndarray) -> None:
+def evaluate_model(model: RandomForestClassifier, X_test: np.ndarray, y_test: np.ndarray) -> Dict[str, float]:
     """
-    Evaluate the trained model and print performance metrics.
+    Evaluate the trained model and return performance metrics.
     
     Args:
         model: Trained model
         X_test: Test features
         y_test: Test labels
+        
+    Returns:
+        Dictionary containing performance metrics
     """
     print("Evaluating model performance...")
     
     y_pred: np.ndarray = model.predict(X_test)
+    
+    # Calculate comprehensive metrics
     accuracy: float = accuracy_score(y_test, y_pred)
+    precision: float = precision_score(y_test, y_pred, average='weighted')
+    recall: float = recall_score(y_test, y_pred, average='weighted')
+    f1: float = f1_score(y_test, y_pred, average='weighted')
+    
+    metrics: Dict[str, float] = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1
+    }
     
     print(f"Model accuracy: {accuracy:.4f}")
+    print(f"Model precision: {precision:.4f}")
+    print(f"Model recall: {recall:.4f}")
+    print(f"Model F1-score: {f1:.4f}")
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred, target_names=['setosa', 'versicolor', 'virginica']))
+    
+    return metrics
 
 
 def save_pickle_model(model: RandomForestClassifier, filepath: str) -> None:
@@ -183,6 +209,105 @@ def save_onnx_model(model: RandomForestClassifier, filepath: str) -> None:
     print(f"✅ Secure ONNX model saved to {filepath}")
 
 
+def register_models_with_mlflow(
+    model: RandomForestClassifier, 
+    onnx_model_path: str,
+    metrics: Dict[str, float],
+    X_train: np.ndarray,
+    dataset_version: str = "1.0"
+) -> None:
+    """
+    Register both pickle and ONNX models in MLflow Model Registry with comprehensive metadata.
+    
+    Args:
+        model: Trained sklearn model
+        onnx_model_path: Path to the ONNX model file
+        metrics: Dictionary of model performance metrics
+        X_train: Training data for signature inference
+        dataset_version: Version of the training dataset
+    """
+    print("\n🚀 Phase 4: Registering models with MLflow Model Registry...")
+    
+    # Configure MLflow tracking URI
+    mlflow.set_tracking_uri("http://localhost:5004")
+    mlflow.set_experiment("iris-classification")
+    
+    with mlflow.start_run() as run:
+        # Log hyperparameters
+        params = {
+            "n_estimators": model.n_estimators,
+            "max_depth": model.max_depth,
+            "random_state": model.random_state,
+            "dataset_version": dataset_version,
+            "training_timestamp": datetime.datetime.utcnow().isoformat()
+        }
+        
+        mlflow.log_params(params)
+        
+        # Log metrics
+        mlflow.log_metrics(metrics)
+        
+        # Log additional metadata
+        mlflow.set_tag("model_type", "RandomForestClassifier")
+        mlflow.set_tag("dataset", "iris")
+        mlflow.set_tag("purpose", "educational_demo")
+        mlflow.set_tag("security_demo", "pickle_vs_onnx")
+        
+        # Register sklearn model (pickle format)
+        sklearn_model_name = "iris-classifier-sklearn"
+        print(f"📝 Registering sklearn model as '{sklearn_model_name}'...")
+        
+        sklearn_model_info = mlflow.sklearn.log_model(
+            sk_model=model,
+            artifact_path="sklearn_model",
+            registered_model_name=sklearn_model_name,
+            signature=mlflow.models.infer_signature(X_train)
+        )
+        
+        print(f"✅ Sklearn model registered: {sklearn_model_info.model_uri}")
+        
+        # Register ONNX model (secure format)
+        onnx_model_name = "iris-classifier-onnx"
+        print(f"📝 Registering ONNX model as '{onnx_model_name}'...")
+        
+        # Load and log ONNX model
+        with open(onnx_model_path, 'rb') as f:
+            onnx_model_bytes = f.read()
+        
+        onnx_model_info = mlflow.onnx.log_model(
+            onnx_model=onnx_model_bytes,
+            artifact_path="onnx_model", 
+            registered_model_name=onnx_model_name,
+            signature=mlflow.models.infer_signature(X_train)
+        )
+        
+        print(f"✅ ONNX model registered: {onnx_model_info.model_uri}")
+        
+        # Log model comparison notes
+        mlflow.log_text(
+            """
+            Model Format Comparison:
+            
+            1. Sklearn (Pickle) Model:
+               - Pros: Native Python format, preserves all sklearn functionality
+               - Cons: Security risk - can execute arbitrary code, Python-specific
+               - Use case: Internal development and testing only
+               
+            2. ONNX Model:
+               - Pros: Secure (no code execution), cross-framework compatibility
+               - Cons: Limited to inference only, some functionality loss
+               - Use case: Production deployment (RECOMMENDED)
+               
+            Security Recommendation: Always use ONNX format for production deployment.
+            """,
+            "model_comparison.txt"
+        )
+        
+        print(f"📊 MLflow run completed: {run.info.run_id}")
+        print("🔗 View models in MLflow UI at: http://localhost:5004")
+        print("📋 Model Registry accessible via MLflow UI > Models tab")
+
+
 def demonstrate_pickle_loading_risk(safe_pickle_path: str, malicious_pickle_path: str) -> None:
     """
     Demonstrate the difference between loading safe and malicious pickle files.
@@ -244,8 +369,8 @@ def main() -> None:
         # Train the model
         model = train_model(X_train, y_train)
         
-        # Evaluate the model
-        evaluate_model(model, X_test, y_test)
+        # Evaluate the model and capture metrics
+        metrics: Dict[str, float] = evaluate_model(model, X_test, y_test)
         
         # Save models in different formats
         safe_pickle_path: str = 'models/iris_classifier.pkl'
@@ -260,6 +385,14 @@ def main() -> None:
         
         # Save the model in secure ONNX format
         save_onnx_model(model, onnx_path)
+        
+        # Phase 4: Register models with MLflow Model Registry
+        try:
+            register_models_with_mlflow(model, onnx_path, metrics, X_train)
+        except Exception as mlflow_error:
+            print(f"⚠️  MLflow registration failed: {mlflow_error}")
+            print("💡 Make sure MLflow server is running: mlflow server --host 0.0.0.0 --port 5004")
+            print("🔄 Continuing with local model saving...")
         
         # Demonstrate the security risks of pickle loading
         demonstrate_pickle_loading_risk(safe_pickle_path, malicious_pickle_path)

@@ -159,3 +159,13 @@ ehthumbs.db
 
 .claude/
 CLAUDE.md
+
+# MLflow tracking directories
+mlruns/
+mlartifacts/
+
+# Data files - should not be in version control
+data/
+
+# Pip installation artifacts
+=*
