@@ -515,6 +515,8 @@ class TestLangChainPromptTemplating:
             
         elif response.status_code == 500:
             pytest.skip("Ollama not available for injection protection testing")
+        elif response.status_code == 504:
+            pytest.skip("Ollama request timed out - service may be unavailable or overloaded")
         else:
             pytest.fail(f"Injection protection test failed: {response.status_code}")
 
