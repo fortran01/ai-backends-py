@@ -1899,14 +1899,15 @@ def drift_report() -> Response:
         current_analysis = recent_production[IRIS_FEATURE_NAMES + ['predicted_class']].copy()
         current_analysis['dataset'] = 'current'
         
-        # Generate drift report using modern Evidently API
-        # Create individual value drift metrics for each feature
+        # Generate drift report using modern Evidently API with more sensitive statistical tests
+        # Create individual value drift metrics for each feature with specific methods
         drift_metrics = []
         for feature in IRIS_FEATURE_NAMES:
-            drift_metrics.append(ValueDrift(column=feature))
+            # Use Wasserstein distance for numerical features (more sensitive than KS test)
+            drift_metrics.append(ValueDrift(column=feature, method="wasserstein"))
         
-        # Add overall drifted columns count
-        drift_metrics.append(DriftedColumnsCount())
+        # Add overall drifted columns count with lower threshold for detection
+        drift_metrics.append(DriftedColumnsCount(num_stattest="wasserstein", drift_share=0.25))
         
         # Create report
         report = Report(metrics=drift_metrics)
@@ -2086,13 +2087,19 @@ def classify_shifted() -> Response:
         # Apply systematic drift simulation
         shifted_features = original_features.copy()
         
-        # Apply bias to specific features to simulate data drift
+        # Apply more aggressive bias to simulate detectable data drift
+        # Based on Evidently best practices for drift detection
         shift_config = {
-            0: 1.5,   # sepal_length += 1.5
-            3: 1.3    # petal_width *= 1.3 (multiplicative)
+            0: 3.0,   # sepal_length += 3.0 (more aggressive)
+            1: 0.8,   # sepal_width *= 0.8 (reduce width) 
+            2: 2.5,   # petal_length += 2.5 (new bias)
+            3: 2.0    # petal_width *= 2.0 (more aggressive multiplier)
         }
         
+        # Apply systematic bias to all features for stronger drift signal
         shifted_features[0, 0] += shift_config[0]  # sepal_length
+        shifted_features[0, 1] *= shift_config[1]  # sepal_width
+        shifted_features[0, 2] += shift_config[2]  # petal_length
         shifted_features[0, 3] *= shift_config[3]  # petal_width
         
         # Make shifted prediction
@@ -2133,6 +2140,8 @@ def classify_shifted() -> Response:
             "drift_simulation": {
                 "applied_shifts": {
                     "sepal_length": f"+{shift_config[0]} units",
+                    "sepal_width": f"*{shift_config[1]} multiplier", 
+                    "petal_length": f"+{shift_config[2]} units",
                     "petal_width": f"*{shift_config[3]} multiplier"
                 },
                 "feature_changes": {
