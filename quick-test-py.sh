@@ -52,12 +52,27 @@ print_status() {
 check_service() {
     local url=$1
     local service_name=$2
-    if curl -s --connect-timeout 3 "$url" > /dev/null 2>&1; then
-        print_status "SUCCESS" "$service_name is running"
-        return 0
+    local port_only=$3
+    
+    if [ "$port_only" = "true" ]; then
+        # For gRPC servers, just check if the port is open
+        local port=$(echo "$url" | grep -o '[0-9]\+$')
+        if nc -z localhost "$port" 2>/dev/null; then
+            print_status "SUCCESS" "$service_name is running"
+            return 0
+        else
+            print_status "WARNING" "$service_name is not running"
+            return 1
+        fi
     else
-        print_status "WARNING" "$service_name is not running"
-        return 1
+        # For HTTP services, use curl
+        if curl -s --connect-timeout 3 "$url" > /dev/null 2>&1; then
+            print_status "SUCCESS" "$service_name is running"
+            return 0
+        else
+            print_status "WARNING" "$service_name is not running"
+            return 1
+        fi
     fi
 }
 
@@ -176,16 +191,23 @@ echo
 # Check required dependencies
 print_status "INFO" "Checking dependencies..."
 command -v curl >/dev/null 2>&1 || { print_status "ERROR" "curl is required but not installed"; exit 1; }
+command -v nc >/dev/null 2>&1 || { print_status "ERROR" "nc (netcat) is required but not installed"; exit 1; }
 command -v jq >/dev/null 2>&1 || print_status "WARNING" "jq not installed - JSON responses won't be pretty-printed"
 
 # Check service availability
 print_status "INFO" "Checking service availability..."
-FLASK_AVAILABLE=$(check_service "$FLASK_URL/health" "Flask API"; echo $?)
-GRPC_AVAILABLE=$(check_service "$GRPC_SERVER_URL" "gRPC Server"; echo $?)  
-HTTP_AVAILABLE=$(check_service "$HTTP_SERVER_URL" "HTTP Server"; echo $?)
-TF_SERVING_AVAILABLE=$(check_service "$TF_SERVING_URL/v1/models/iris" "TensorFlow Serving"; echo $?)
-TRITON_AVAILABLE=$(check_service "$TRITON_URL/v2/health/ready" "Triton Inference Server"; echo $?)
-MLFLOW_AVAILABLE=$(check_service "$MLFLOW_URL" "MLflow Server"; echo $?)
+check_service "$FLASK_URL/health" "Flask API"
+FLASK_AVAILABLE=$?
+check_service "$GRPC_SERVER_URL" "gRPC Server" true
+GRPC_AVAILABLE=$?
+check_service "$HTTP_SERVER_URL" "HTTP Server"
+HTTP_AVAILABLE=$?
+check_service "$TF_SERVING_URL/v1/models/iris" "TensorFlow Serving"
+TF_SERVING_AVAILABLE=$?
+check_service "$TRITON_URL/v2/health/ready" "Triton Inference Server"
+TRITON_AVAILABLE=$?
+check_service "$MLFLOW_URL" "MLflow Server"
+MLFLOW_AVAILABLE=$?
 
 echo
 
@@ -225,21 +247,21 @@ if [ "$RUN_ALL" = true ] || [ "$RUN_PHASE2" = true ]; then
         "curl -s -X POST $FLASK_URL/api/v1/classify-detailed -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'"
     
     # HTTP classification (optional)
-    if [ "$HTTP_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if [[ "$HTTP_AVAILABLE" -eq 0 ]] || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "HTTP Classification" \
             "curl -s -X POST $FLASK_URL/api/v1/classify-http -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'" \
             true
     fi
     
     # gRPC classification (optional)
-    if [ "$GRPC_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if [[ "$GRPC_AVAILABLE" -eq 0 ]] || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "gRPC Classification" \
             "curl -s -X POST $FLASK_URL/api/v1/classify-grpc -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'" \
             true
     fi
     
     # Performance benchmark (optional)
-    if [ "$GRPC_AVAILABLE" -eq 0 ] && [ "$HTTP_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if ([[ "$GRPC_AVAILABLE" -eq 0 ]] && [[ "$HTTP_AVAILABLE" -eq 0 ]]) || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "Performance Benchmark (HTTP vs gRPC)" \
             "curl -s -X POST $FLASK_URL/api/v1/classify-benchmark -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2, \"iterations\": 5}'" \
             true
@@ -280,7 +302,7 @@ if [ "$RUN_ALL" = true ] || [ "$RUN_PHASE4" = true ]; then
         "curl -s -X POST $FLASK_URL/api/v1/classify-shifted -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'"
     
     # Model registry classification (modern approach with aliases)
-    if [ "$MLFLOW_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if [[ "$MLFLOW_AVAILABLE" -eq 0 ]] || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "Model Registry Classification (Alias)" \
             "curl -s -X POST '$FLASK_URL/api/v1/classify-registry?model_format=sklearn&alias=production' -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'" \
             true
@@ -294,14 +316,14 @@ if [ "$RUN_ALL" = true ] || [ "$RUN_PHASE5" = true ]; then
     print_status "INFO" "=== PHASE 5 TESTS ==="
     
     # TensorFlow Serving classification (optional)
-    if [ "$TF_SERVING_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if [[ "$TF_SERVING_AVAILABLE" -eq 0 ]] || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "TensorFlow Serving Classification" \
             "curl -s -X POST $FLASK_URL/api/v1/classify-tf-serving -H 'Content-Type: application/json' -d '{\"sepal_length\": 5.1, \"sepal_width\": 3.5, \"petal_length\": 1.4, \"petal_width\": 0.2}'" \
             true
     fi
     
     # Triton Inference Server classification (optional)
-    if [ "$TRITON_AVAILABLE" -eq 0 ] || [ "$SKIP_OPTIONAL" = false ]; then
+    if [[ "$TRITON_AVAILABLE" -eq 0 ]] || [[ "$SKIP_OPTIONAL" = false ]]; then
         run_test "Triton Inference Server Classification" \
             "curl -s -X POST $FLASK_URL/api/v1/classify-triton -H 'Content-Type: application/json' -d '{\"sepal_length\": 6.4, \"sepal_width\": 3.2, \"petal_length\": 4.5, \"petal_width\": 1.5}'" \
             true
