@@ -73,6 +73,11 @@ class TestLangChainChatEndpoint:
             error_data: Dict[str, Any] = response.json()
             assert "error" in error_data
             assert "Ollama" in error_data["error"]
+        elif response.status_code == 504:
+            # Ollama timeout - verify graceful error handling
+            error_data: Dict[str, Any] = response.json()
+            assert "error" in error_data
+            assert "timed out" in error_data["error"]
         else:
             pytest.fail(f"Unexpected status code: {response.status_code}")
     
