@@ -30,6 +30,7 @@ import warnings
 import mlflow
 import mlflow.sklearn
 import mlflow.onnx
+import onnx
 
 
 def load_and_prepare_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -177,36 +178,43 @@ def create_malicious_pickle(filepath: str) -> None:
 
 def save_onnx_model(model: RandomForestClassifier, filepath: str) -> None:
     """
-    Save model in secure ONNX format.
+    Save model in secure ONNX format with tensor-only outputs for onnxruntime-node compatibility.
     
     ONNX is the recommended format for production as it:
     - Cannot execute arbitrary code
     - Is framework-agnostic
     - Provides better security and portability
+    - Compatible with both Python and TypeScript/Node.js runtimes
     
     Args:
         model: Trained model to save
         filepath: Path to save the ONNX file
     """
-    print(f"\n✅ SECURE: Saving model as ONNX to {filepath}")
+    print(f"\n✅ SECURE: Saving tensor-only ONNX model to {filepath}")
     print("✅ ONNX format is safe - it cannot execute arbitrary code!")
     print("✅ ONNX provides cross-framework compatibility and better security!")
+    print("✅ Tensor-only outputs for onnxruntime-node compatibility!")
     
     # Define input shape for ONNX conversion (4 features for Iris dataset)
     initial_types: list = [('float_input', FloatTensorType([None, 4]))]
     
-    # Convert sklearn model to ONNX format
+    # Convert sklearn model to ONNX format with tensor-only outputs
     onnx_model = convert_sklearn(
         model, 
         initial_types=initial_types,
-        target_opset=12  # Use a stable ONNX opset version
+        target_opset=12,  # Use a stable ONNX opset version
+        options={
+            # Only output tensor types (no maps/dictionaries) for onnxruntime-node compatibility
+            'zipmap': False,  # Disable ZipMap which creates dictionary outputs
+            'nocl': True,     # No class labels in probability output
+        }
     )
     
     # Save ONNX model
     with open(filepath, 'wb') as f:
         f.write(onnx_model.SerializeToString())
     
-    print(f"✅ Secure ONNX model saved to {filepath}")
+    print(f"✅ Secure tensor-only ONNX model saved to {filepath}")
 
 
 def register_models_with_mlflow(
@@ -270,15 +278,20 @@ def register_models_with_mlflow(
         onnx_model_name = "iris-classifier-onnx"
         print(f"📝 Registering ONNX model as '{onnx_model_name}'...")
         
-        # Load and log ONNX model
-        with open(onnx_model_path, 'rb') as f:
-            onnx_model_bytes = f.read()
+        # Load ONNX model properly using onnx.load()
+        import onnx
+        onnx_model = onnx.load(onnx_model_path)
+        
+        # Create signature for ONNX model
+        y_pred = model.predict(X_train)
+        signature = mlflow.models.infer_signature(X_train, y_pred)
         
         onnx_model_info = mlflow.onnx.log_model(
-            onnx_model=onnx_model_bytes,
+            onnx_model=onnx_model,
             artifact_path="onnx_model", 
             registered_model_name=onnx_model_name,
-            signature=mlflow.models.infer_signature(X_train)
+            signature=signature,
+            input_example=X_train[:5]  # Add example input
         )
         
         print(f"✅ ONNX model registered: {onnx_model_info.model_uri}")

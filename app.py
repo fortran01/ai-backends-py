@@ -49,13 +49,19 @@ from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 from langchain.schema import HumanMessage, AIMessage
 
-# gRPC imports for Phase 2
-import proto.inference_pb2 as inference_pb2
-import proto.inference_pb2_grpc as inference_pb2_grpc
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# gRPC imports for Phase 2 - temporarily disabled due to protobuf compatibility
+try:
+    import proto.inference_pb2 as inference_pb2
+    import proto.inference_pb2_grpc as inference_pb2_grpc
+    GRPC_AVAILABLE = True
+    logger.info("gRPC modules loaded successfully")
+except ImportError as e:
+    logger.warning(f"gRPC imports failed: {e}. gRPC endpoints will be disabled.")
+    GRPC_AVAILABLE = False
 
 app: Flask = Flask(__name__)
 
@@ -877,6 +883,12 @@ def classify_grpc() -> Response:
         503: gRPC service unavailable
         500: gRPC communication error
     """
+    # Check if gRPC is available
+    if not GRPC_AVAILABLE:
+        return jsonify({
+            "error": "gRPC service unavailable due to protobuf compatibility issues"  
+        }), 503
+    
     try:
         # Validate request data
         if not request.is_json:
@@ -1673,14 +1685,9 @@ def classify() -> Response:
             # Run inference
             results = session.run(output_names, {input_name: features_array})
             
-            # Parse results from sklearn RandomForest ONNX export
+            # Parse results from ONNX model with dual outputs  
             predicted_class_index: int = int(results[0][0])  # Class prediction
-            prob_dict: Dict[int, float] = results[1][0]  # Probability dictionary {class_idx: prob}
-            
-            # Convert probability dictionary to ordered array matching IRIS_CLASSES
-            raw_probabilities: np.ndarray = np.array([
-                prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
-            ])
+            raw_probabilities: np.ndarray = results[1][0]  # Probability array
             
             # Normalize probabilities to ensure they sum to 1.0 and are in [0,1] range
             prob_sum: float = float(np.sum(raw_probabilities))
@@ -1730,6 +1737,646 @@ def classify() -> Response:
             
     except Exception as e:
         logger.error(f"Unexpected error in /api/v1/classify: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/v1/classify-tf-serving', methods=['POST'])
+def classify_tf_serving() -> Response:
+    """
+    Iris classification using TensorFlow Serving.
+    
+    This endpoint demonstrates dedicated model serving infrastructure by calling
+    a TensorFlow Serving instance. TensorFlow Serving provides production-grade
+    optimizations like batching, versioning, and hardware acceleration.
+    
+    Request Body:
+        JSON object with Iris flower measurements:
+        {
+            "sepal_length": float (0.0-10.0),
+            "sepal_width": float (0.0-10.0), 
+            "petal_length": float (0.0-10.0),
+            "petal_width": float (0.0-10.0)
+        }
+        
+    Returns:
+        JSON response with prediction results:
+        {
+            "predicted_class": str,
+            "predicted_class_index": int,
+            "probabilities": [float, float, float],
+            "confidence": float,
+            "serving_infrastructure": "tensorflow_serving",
+            "model_version": int,
+            "response_time_ms": float,
+            "input_features": object
+        }
+        
+    Raises:
+        400: Invalid input data or missing required fields
+        503: TensorFlow Serving unavailable
+        500: Internal server error
+    """
+    try:
+        # Input validation
+        if not request.is_json:
+            return jsonify({
+                "error": "Content-Type must be application/json"
+            }), 400
+            
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "error": "Invalid JSON data"
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                "error": f"Missing required fields: {missing_fields}"
+            }), 400
+        
+        # Validate field types and ranges
+        try:
+            features = []
+            for field in required_fields:
+                value = float(data[field])
+                if not (0.0 <= value <= 10.0):
+                    return jsonify({
+                        "error": f"Field '{field}' must be between 0.0 and 10.0, got {value}"
+                    }), 400
+                features.append(value)
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                "error": f"All feature values must be numeric: {str(e)}"
+            }), 400
+        
+        # Prepare TensorFlow Serving request
+        tf_serving_url = "http://localhost:8501/v1/models/iris:predict"
+        tf_serving_request = {
+            "instances": [features]
+        }
+        
+        start_time = time.time()
+        
+        try:
+            # Call TensorFlow Serving
+            response = requests.post(
+                tf_serving_url,
+                json=tf_serving_request,
+                headers={'Content-Type': 'application/json'},
+                timeout=10.0
+            )
+            
+            response_time_ms = (time.time() - start_time) * 1000
+            
+            if response.status_code != 200:
+                logger.error(f"TensorFlow Serving error: {response.status_code} - {response.text}")
+                return jsonify({
+                    "error": "TensorFlow Serving request failed",
+                    "details": response.text,
+                    "status_code": response.status_code
+                }), 503
+            
+            # Parse TensorFlow Serving response
+            tf_response = response.json()
+            predictions = tf_response.get('predictions', [])
+            
+            if not predictions:
+                return jsonify({
+                    "error": "No predictions returned from TensorFlow Serving"
+                }), 500
+            
+            # Process prediction results
+            prediction = predictions[0]
+            predicted_class_index = int(prediction['output_label'])
+            prediction_probs = prediction['output_probability']
+            predicted_class = IRIS_CLASSES[predicted_class_index]
+            confidence = float(max(prediction_probs))
+            
+            # Log for drift monitoring
+            features_dict = {
+                'sepal_length': float(data['sepal_length']),
+                'sepal_width': float(data['sepal_width']),
+                'petal_length': float(data['petal_length']),
+                'petal_width': float(data['petal_width'])
+            }
+            prediction_dict = {
+                'predicted_class': predicted_class,
+                'confidence': confidence
+            }
+            log_classification_request(features_dict, prediction_dict)
+            
+            return jsonify({
+                "predicted_class": predicted_class,
+                "predicted_class_index": predicted_class_index,
+                "probabilities": [float(p) for p in prediction_probs],
+                "confidence": confidence,
+                "serving_infrastructure": "tensorflow_serving",
+                "model_version": tf_response.get('model_version', 1),
+                "response_time_ms": round(response_time_ms, 2),
+                "all_classes": IRIS_CLASSES,
+                "input_features": {
+                    "sepal_length": float(data['sepal_length']),
+                    "sepal_width": float(data['sepal_width']),
+                    "petal_length": float(data['petal_length']),
+                    "petal_width": float(data['petal_width'])
+                }
+            })
+            
+        except requests.exceptions.ConnectionError:
+            logger.error("TensorFlow Serving connection failed")
+            return jsonify({
+                "error": "TensorFlow Serving unavailable",
+                "details": "Cannot connect to TensorFlow Serving at localhost:8501",
+                "suggestion": "Start TensorFlow Serving with: tensorflow_model_server --rest_api_port=8501 --model_name=iris --model_base_path=/path/to/models"
+            }), 503
+            
+        except requests.exceptions.Timeout:
+            logger.error("TensorFlow Serving request timeout")
+            return jsonify({
+                "error": "TensorFlow Serving timeout",
+                "details": "Request to TensorFlow Serving timed out after 10 seconds"
+            }), 503
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"TensorFlow Serving request error: {e}")
+            return jsonify({
+                "error": "TensorFlow Serving request failed",
+                "details": str(e)
+            }), 503
+            
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/classify-tf-serving: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/v1/classify-triton', methods=['POST'])
+def classify_triton() -> Response:
+    """
+    Iris classification using Triton Inference Server.
+    
+    This endpoint demonstrates high-performance model serving using NVIDIA Triton
+    Inference Server. Triton provides advanced features like dynamic batching,
+    concurrent model execution, and multi-framework support.
+    
+    Request Body:
+        JSON object with Iris flower measurements:
+        {
+            "sepal_length": float (0.0-10.0),
+            "sepal_width": float (0.0-10.0), 
+            "petal_length": float (0.0-10.0),
+            "petal_width": float (0.0-10.0)
+        }
+        
+    Returns:
+        JSON response with prediction results:
+        {
+            "predicted_class": str,
+            "predicted_class_index": int,
+            "probabilities": [float, float, float],
+            "confidence": float,
+            "serving_infrastructure": "triton_inference_server",
+            "model_version": int,
+            "response_time_ms": float,
+            "batch_size": int,
+            "input_features": object
+        }
+        
+    Raises:
+        400: Invalid input data or missing required fields
+        503: Triton Inference Server unavailable
+        500: Internal server error
+    """
+    try:
+        # Input validation
+        if not request.is_json:
+            return jsonify({
+                "error": "Content-Type must be application/json"
+            }), 400
+            
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "error": "Invalid JSON data"
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                "error": f"Missing required fields: {missing_fields}"
+            }), 400
+        
+        # Validate field types and ranges
+        try:
+            features = []
+            for field in required_fields:
+                value = float(data[field])
+                if not (0.0 <= value <= 10.0):
+                    return jsonify({
+                        "error": f"Field '{field}' must be between 0.0 and 10.0, got {value}"
+                    }), 400
+                features.append(value)
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                "error": f"All feature values must be numeric: {str(e)}"
+            }), 400
+        
+        start_time = time.time()
+        
+        try:
+            import tritonclient.http as httpclient
+            from tritonclient.utils import np_to_triton_dtype
+            
+            # Create Triton client
+            triton_client = httpclient.InferenceServerClient(url="localhost:8000")
+            
+            # Check if server is ready
+            if not triton_client.is_server_ready():
+                return jsonify({
+                    "error": "Triton Inference Server not ready",
+                    "details": "Server is not in ready state"
+                }), 503
+            
+            # Check if model is ready
+            model_name = "iris_onnx"
+            if not triton_client.is_model_ready(model_name):
+                return jsonify({
+                    "error": f"Model '{model_name}' not ready",
+                    "details": "Model is not loaded or not in ready state"
+                }), 503
+            
+            # Prepare input data
+            input_data = np.array([features], dtype=np.float32)
+            
+            # Create inference request
+            inputs = []
+            inputs.append(httpclient.InferInput("float_input", input_data.shape, np_to_triton_dtype(input_data.dtype)))
+            inputs[0].set_data_from_numpy(input_data)
+            
+            # Define outputs
+            outputs = []
+            outputs.append(httpclient.InferRequestedOutput("label"))
+            outputs.append(httpclient.InferRequestedOutput("probabilities"))
+            
+            # Make inference request
+            response = triton_client.infer(
+                model_name=model_name,
+                inputs=inputs,
+                outputs=outputs
+            )
+            
+            response_time_ms = (time.time() - start_time) * 1000
+            
+            # Parse results
+            predicted_class_index = int(response.as_numpy("label")[0][0])  # Extract scalar from [1,1] shape
+            probabilities = response.as_numpy("probabilities")[0]  # Extract from [1,3] to [3] shape
+            
+            predicted_class = IRIS_CLASSES[predicted_class_index]
+            confidence = float(max(probabilities))
+            
+            # Get model version
+            model_version = response.get_response().get("model_version", "1")
+            
+            # Log for drift monitoring
+            features_dict = {
+                'sepal_length': float(data['sepal_length']),
+                'sepal_width': float(data['sepal_width']),
+                'petal_length': float(data['petal_length']),
+                'petal_width': float(data['petal_width'])
+            }
+            prediction_dict = {
+                'predicted_class': predicted_class,
+                'confidence': confidence
+            }
+            log_classification_request(features_dict, prediction_dict)
+            
+            return jsonify({
+                "predicted_class": predicted_class,
+                "predicted_class_index": int(predicted_class_index),
+                "probabilities": [float(p) for p in probabilities],
+                "confidence": confidence,
+                "serving_infrastructure": "triton_inference_server",
+                "model_version": model_version,
+                "response_time_ms": round(response_time_ms, 2),
+                "batch_size": 1,
+                "all_classes": IRIS_CLASSES,
+                "input_features": {
+                    "sepal_length": float(data['sepal_length']),
+                    "sepal_width": float(data['sepal_width']),
+                    "petal_length": float(data['petal_length']),
+                    "petal_width": float(data['petal_width'])
+                }
+            })
+            
+        except ImportError:
+            logger.error("Triton client not available")
+            return jsonify({
+                "error": "Triton client not installed",
+                "details": "Install with: pip install tritonclient[http]",
+                "suggestion": "Triton client is required for this endpoint"
+            }), 503
+            
+        except Exception as triton_error:
+            logger.error(f"Triton inference error: {triton_error}")
+            
+            # Check if it's a connection error
+            if "Connection refused" in str(triton_error) or "Failed to connect" in str(triton_error):
+                return jsonify({
+                    "error": "Triton Inference Server unavailable",
+                    "details": "Cannot connect to Triton Inference Server at localhost:8000",
+                    "suggestion": "Start Triton with: tritonserver --model-repository=/path/to/triton_model_repository"
+                }), 503
+            else:
+                return jsonify({
+                    "error": "Triton inference failed",
+                    "details": str(triton_error)
+                }), 500
+            
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/classify-triton: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/v1/serving-comparison', methods=['POST'])
+def serving_comparison() -> Response:
+    """
+    Compare performance across different model serving infrastructures.
+    
+    This endpoint demonstrates the performance characteristics of different
+    serving approaches: direct ONNX loading, TensorFlow Serving, and Triton
+    Inference Server. It measures response times and analyzes the trade-offs
+    between different serving architectures.
+    
+    Request Body:
+        JSON object with test configuration:
+        {
+            "sepal_length": float (0.0-10.0),
+            "sepal_width": float (0.0-10.0), 
+            "petal_length": float (0.0-10.0),
+            "petal_width": float (0.0-10.0),
+            "iterations": int (1-10, default: 3)
+        }
+        
+    Returns:
+        JSON response with performance comparison:
+        {
+            "test_configuration": object,
+            "serving_methods": {
+                "direct_onnx": {
+                    "available": bool,
+                    "response_times_ms": [float, ...],
+                    "average_response_time_ms": float,
+                    "success_rate": float,
+                    "infrastructure": "direct_onnx_runtime"
+                },
+                "tensorflow_serving": {
+                    "available": bool,
+                    "response_times_ms": [float, ...] | null,
+                    "average_response_time_ms": float | null,
+                    "success_rate": float,
+                    "infrastructure": "tensorflow_serving",
+                    "error": str | null
+                },
+                "triton_inference": {
+                    "available": bool,
+                    "response_times_ms": [float, ...] | null,
+                    "average_response_time_ms": float | null,
+                    "success_rate": float,
+                    "infrastructure": "triton_inference_server",
+                    "error": str | null
+                }
+            },
+            "performance_analysis": {
+                "fastest_method": str,
+                "fastest_avg_time_ms": float,
+                "slowest_method": str,
+                "slowest_avg_time_ms": float,
+                "speedup_factor": float,
+                "recommendations": [str, ...]
+            }
+        }
+        
+    Raises:
+        400: Invalid input data or missing required fields
+        500: Internal server error
+    """
+    try:
+        # Input validation
+        if not request.is_json:
+            return jsonify({
+                "error": "Content-Type must be application/json"
+            }), 400
+            
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "error": "Invalid JSON data"
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                "error": f"Missing required fields: {missing_fields}"
+            }), 400
+        
+        # Validate field types and ranges
+        try:
+            for field in required_fields:
+                value = float(data[field])
+                if not (0.0 <= value <= 10.0):
+                    return jsonify({
+                        "error": f"Field '{field}' must be between 0.0 and 10.0, got {value}"
+                    }), 400
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                "error": f"All feature values must be numeric: {str(e)}"
+            }), 400
+        
+        # Get iterations parameter
+        iterations = int(data.get('iterations', 3))
+        if not (1 <= iterations <= 10):
+            return jsonify({
+                "error": "Iterations must be between 1 and 10"
+            }), 400
+        
+        test_sample = {
+            'sepal_length': float(data['sepal_length']),
+            'sepal_width': float(data['sepal_width']),
+            'petal_length': float(data['petal_length']),
+            'petal_width': float(data['petal_width'])
+        }
+        
+        # Test configurations
+        serving_methods = {}
+        
+        # 1. Direct ONNX Runtime (always available)
+        direct_onnx_times = []
+        direct_onnx_successes = 0
+        
+        for i in range(iterations):
+            try:
+                start_time = time.time()
+                # Call the direct ONNX endpoint
+                response = requests.post(
+                    f"{request.host_url}api/v1/classify",
+                    json=test_sample,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=10.0
+                )
+                response_time = (time.time() - start_time) * 1000
+                
+                if response.status_code == 200:
+                    direct_onnx_successes += 1
+                    direct_onnx_times.append(response_time)
+                
+            except Exception as e:
+                logger.warning(f"Direct ONNX test {i+1} failed: {e}")
+        
+        serving_methods['direct_onnx'] = {
+            'available': len(direct_onnx_times) > 0,
+            'response_times_ms': direct_onnx_times,
+            'average_response_time_ms': sum(direct_onnx_times) / len(direct_onnx_times) if direct_onnx_times else None,
+            'success_rate': direct_onnx_successes / iterations,
+            'infrastructure': 'direct_onnx_runtime'
+        }
+        
+        # 2. TensorFlow Serving
+        tf_serving_times = []
+        tf_serving_successes = 0
+        tf_serving_error = None
+        
+        for i in range(iterations):
+            try:
+                start_time = time.time()
+                response = requests.post(
+                    f"{request.host_url}api/v1/classify-tf-serving",
+                    json=test_sample,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=10.0
+                )
+                response_time = (time.time() - start_time) * 1000
+                
+                if response.status_code == 200:
+                    tf_serving_successes += 1
+                    tf_serving_times.append(response_time)
+                elif response.status_code == 503:
+                    tf_serving_error = "TensorFlow Serving unavailable"
+                    break
+                
+            except Exception as e:
+                tf_serving_error = str(e)
+                break
+        
+        serving_methods['tensorflow_serving'] = {
+            'available': len(tf_serving_times) > 0,
+            'response_times_ms': tf_serving_times if tf_serving_times else None,
+            'average_response_time_ms': sum(tf_serving_times) / len(tf_serving_times) if tf_serving_times else None,
+            'success_rate': tf_serving_successes / iterations,
+            'infrastructure': 'tensorflow_serving',
+            'error': tf_serving_error
+        }
+        
+        # 3. Triton Inference Server
+        triton_times = []
+        triton_successes = 0
+        triton_error = None
+        
+        for i in range(iterations):
+            try:
+                start_time = time.time()
+                response = requests.post(
+                    f"{request.host_url}api/v1/classify-triton",
+                    json=test_sample,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=10.0
+                )
+                response_time = (time.time() - start_time) * 1000
+                
+                if response.status_code == 200:
+                    triton_successes += 1
+                    triton_times.append(response_time)
+                elif response.status_code == 503:
+                    triton_error = "Triton Inference Server unavailable"
+                    break
+                
+            except Exception as e:
+                triton_error = str(e)
+                break
+        
+        serving_methods['triton_inference'] = {
+            'available': len(triton_times) > 0,
+            'response_times_ms': triton_times if triton_times else None,
+            'average_response_time_ms': sum(triton_times) / len(triton_times) if triton_times else None,
+            'success_rate': triton_successes / iterations,
+            'infrastructure': 'triton_inference_server',
+            'error': triton_error
+        }
+        
+        # Performance analysis
+        available_methods = {k: v for k, v in serving_methods.items() if v['available'] and v['average_response_time_ms']}
+        
+        performance_analysis = {}
+        recommendations = []
+        
+        if available_methods:
+            # Find fastest and slowest methods
+            fastest_method = min(available_methods.items(), key=lambda x: x[1]['average_response_time_ms'])
+            slowest_method = max(available_methods.items(), key=lambda x: x[1]['average_response_time_ms'])
+            
+            fastest_name, fastest_data = fastest_method
+            slowest_name, slowest_data = slowest_method
+            
+            speedup_factor = slowest_data['average_response_time_ms'] / fastest_data['average_response_time_ms']
+            
+            performance_analysis = {
+                'fastest_method': fastest_name,
+                'fastest_avg_time_ms': round(fastest_data['average_response_time_ms'], 2),
+                'slowest_method': slowest_name,
+                'slowest_avg_time_ms': round(slowest_data['average_response_time_ms'], 2),
+                'speedup_factor': round(speedup_factor, 2)
+            }
+            
+            # Generate recommendations
+            if fastest_name == 'direct_onnx':
+                recommendations.append("Direct ONNX is fastest for single requests with minimal overhead")
+            elif fastest_name == 'tensorflow_serving':
+                recommendations.append("TensorFlow Serving provides good performance with production features")
+            elif fastest_name == 'triton_inference':
+                recommendations.append("Triton excels with dynamic batching and concurrent requests")
+            
+            if len(available_methods) > 1:
+                recommendations.append(f"Performance difference: {speedup_factor:.1f}x between fastest and slowest")
+            
+        else:
+            recommendations.append("No serving methods available - check server configurations")
+        
+        # Add infrastructure-specific recommendations
+        if not serving_methods['tensorflow_serving']['available']:
+            recommendations.append("TensorFlow Serving: Start with tensorflow_model_server --rest_api_port=8501")
+        
+        if not serving_methods['triton_inference']['available']:
+            recommendations.append("Triton: Start with tritonserver --model-repository=/path/to/models")
+        
+        performance_analysis['recommendations'] = recommendations
+        
+        return jsonify({
+            "test_configuration": {
+                "sample": test_sample,
+                "iterations": iterations,
+                "timestamp": time.time()
+            },
+            "serving_methods": serving_methods,
+            "performance_analysis": performance_analysis
+        })
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/serving-comparison: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -2058,11 +2705,27 @@ def classify_shifted() -> Response:
             
             results = session.run(output_names, {input_name: features_array})
             predicted_class_index: int = int(results[0][0])
-            prob_dict: Dict[int, float] = results[1][0]
             
-            raw_probabilities: np.ndarray = np.array([
-                prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
-            ])
+            # Handle improved model with dual outputs (probabilities as array)
+            if len(results) >= 2:
+                probability_output = results[1]
+                if len(probability_output.shape) > 1 and probability_output.shape[0] > 0:
+                    # Extract probabilities array from improved model
+                    raw_probabilities: np.ndarray = probability_output[0]
+                else:
+                    # Fallback: try to handle as dictionary format
+                    prob_dict = results[1][0]
+                    if hasattr(prob_dict, 'get'):
+                        # Dictionary format
+                        raw_probabilities = np.array([
+                            prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
+                        ])
+                    else:
+                        # Already array format
+                        raw_probabilities = np.array(prob_dict)
+            else:
+                # No probability output available
+                raw_probabilities = np.ones(len(IRIS_CLASSES)) / len(IRIS_CLASSES)
             
             prob_sum: float = float(np.sum(raw_probabilities))
             if prob_sum > 0:
@@ -2693,6 +3356,10 @@ if __name__ == '__main__':
     print("   GET  /api/v1/drift-report    - Production drift monitoring with Evidently AI")
     print("   POST /api/v1/classify-shifted - Drift simulation with systematic bias")
     print("   POST /api/v1/classify-registry - Model registry-based inference with MLflow")
+    print("   Phase 5:")
+    print("   POST /api/v1/classify-tf-serving - Iris classification via TensorFlow Serving")
+    print("   POST /api/v1/classify-triton - High-performance classification via Triton Inference Server")
+    print("   POST /api/v1/serving-comparison - Performance comparison of serving infrastructures")
     print("🔒 Security features demonstrated:")
     print("   - Prompt injection detection and prevention")
     print("   - ONNX model format for secure inference")
@@ -2715,14 +3382,39 @@ if __name__ == '__main__':
     print("   - Data and model drift monitoring with Evidently AI")
     print("   - Centralized model registry with version control")
     print("   - Automated production logging and monitoring")
+    print("🚀 Phase 5 features demonstrated:")
+    print("   - Dedicated model serving infrastructure with TensorFlow Serving")
+    print("   - High-performance inference with Triton Inference Server")
+    print("   - Dynamic batching for improved throughput")
+    print("   - Serving architecture performance comparison")
     print("💡 To start HTTP server: python http_server.py (port 5002 - in separate terminal)")
     print("💡 To start gRPC server: python grpc_server.py (port 50051 - in separate terminal)")
     print("💡 To start MLflow server: mlflow server --host 0.0.0.0 --port 5004 (in separate terminal)")
+    print("💡 Phase 5 - To start TensorFlow Serving: tensorflow_model_server --rest_api_port=8501 --model_name=iris --model_base_path=/path/to/models")
+    print("💡 Phase 5 - To start Triton: tritonserver --model-repository=/path/to/triton_model_repository --http-port=8000")
     
     # Phase 4: Initialize production monitoring
     print("🔍 Initializing Phase 4 production monitoring...")
     create_reference_dataset()
     
-    # Run Flask development server with reloader disabled to prevent infinite loop
-    # The infinite reload was caused by Flask watching venv/plotly/evidently files
-    app.run(host='0.0.0.0', port=5001, debug=True, use_reloader=False)
+    # Run Flask development server with auto-reload enabled
+    # Flask's reloader automatically watches .py files and restarts when changes are detected
+    import os
+    os.environ['FLASK_ENV'] = 'development'
+    
+    print("🔄 Auto-reload enabled - Flask will restart when code changes are detected")
+    print("💡 The server will automatically restart when you modify .py files")
+    print("📁 Flask watches Python files by default, ignoring non-Python files")
+    print("🚀 Use Ctrl+C to stop the server")
+    
+    # Use Flask's built-in development server with reloader
+    # This is the recommended way per Flask documentation
+    app.run(
+        host='0.0.0.0',
+        port=5001,
+        debug=True,
+        use_reloader=True,
+        # Additional options for better development experience
+        threaded=True,  # Handle multiple requests concurrently
+        use_debugger=True  # Enable interactive debugger on errors
+    )

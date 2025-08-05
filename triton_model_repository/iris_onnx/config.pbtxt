@@ -1,0 +1,23 @@
+name: "iris_onnx"
+platform: "onnxruntime_onnx"
+max_batch_size: 32
+
+# Dynamic batching configuration for performance optimization
+dynamic_batching {
+  max_queue_delay_microseconds: 100
+  preferred_batch_size: [ 4, 8 ]
+  default_queue_policy {
+    max_queue_size: 100
+  }
+}
+
+# Instance group for model deployment
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]
+
+# Model versioning
+version_policy: { all { }}

@@ -33,3 +33,9 @@ fastembed>=0.2.0
 evidently>=0.4.0
 mlflow>=2.9.0
 pandas>=1.5.0
+
+# Phase 5: Dedicated model serving infrastructure dependencies
+tensorflow>=2.10.0
+tf2onnx>=1.14.0
+tensorflow-serving-api>=2.10.0
+tritonclient[http]>=2.37.0

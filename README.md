@@ -8,11 +8,11 @@
 [![MLflow](https://img.shields.io/badge/mlflow-2.9%2B%20%7C%203.x-blue.svg)](https://mlflow.org/)
 [![Evidently AI](https://img.shields.io/badge/evidently-0.4%2B-orange.svg)](https://evidentlyai.com/)
 
-This project demonstrates **Phase 4** of the AI Back-End architecture course, implementing complete production model lifecycle management with advanced drift monitoring and centralized model registries. **Compatible with MLflow 3.x** with modern alias-based model deployment while maintaining backward compatibility with legacy stage-based workflows.
+This project demonstrates **Phase 5** of the AI Back-End architecture course, implementing dedicated model serving infrastructure that provides production-grade optimizations beyond direct model loading in applications. This phase showcases the evolution from prototype to production-grade serving infrastructure.
 
-## 🎯 Phase 4 Objectives
+## 🎯 Phase 5 Objectives
 
-**Goal:** Demonstrate a complete model lifecycle workflow using a model registry and implement production-grade monitoring for data and model drift, showcasing enterprise ML operations (MLOps) patterns.
+**Goal:** Showcase dedicated model serving frameworks that provide production-grade optimizations beyond direct model loading in the application, demonstrating the performance characteristics and trade-offs between different serving architectures.
 
 ## 🚀 Features Implemented
 
@@ -58,6 +58,17 @@ This project demonstrates **Phase 4** of the AI Back-End architecture course, im
 29. **Model Management CLI** - `scripts/manage_models.py` for model lifecycle operations (staging, promotion, comparison)
 30. **Production Monitoring** - Complete MLOps pipeline with drift detection and model registry integration
 
+### ✅ Phase 5 Completed Tasks
+
+31. **TensorFlow SavedModel Creation** - Convert ONNX model to TensorFlow SavedModel format for TensorFlow Serving
+32. **TensorFlow Serving Integration** - `/api/v1/classify-tf-serving` endpoint calling TensorFlow Serving REST API
+33. **Triton Model Repository** - NVIDIA Triton Inference Server model repository with ONNX model and configuration
+34. **Triton Integration** - `/api/v1/classify-triton` endpoint with advanced Triton client features
+35. **Dynamic Batching Configuration** - Triton config with automatic request batching for improved throughput
+36. **Performance Comparison Endpoint** - `/api/v1/serving-comparison` comparing all serving infrastructures
+37. **Dynamic Batching Demo Script** - `scripts/test_dynamic_batching.py` demonstrating batching performance benefits
+38. **Serving Architecture Analysis** - Comprehensive comparison of direct loading vs dedicated serving
+
 ### 🔒 Security Features
 
 - **Prompt Injection Detection** - Pattern-based detection of malicious prompts
@@ -80,6 +91,8 @@ This project demonstrates **Phase 4** of the AI Back-End architecture course, im
 3. **TinyLlama model** pulled via Ollama
 4. **Redis** installed and running (for Phase 3 caching)
 5. **MLflow** server running (for Phase 4 model registry)
+6. **TensorFlow Serving** installed (for Phase 5 dedicated serving)
+7. **Triton Inference Server** installed (for Phase 5 high-performance serving)
 
 ### Setup Instructions
 
@@ -104,8 +117,8 @@ ollama pull tinyllama
 # 6. (Phase 3) Start Redis for caching
 brew services start redis  # macOS
 
-# 7. (Phase 4) Start MLflow server in a separate terminal
-mlflow server --host 0.0.0.0 --port 5004
+# 7. (Phase 4) Start MLflow server with artifact serving in a separate terminal
+mlflow server --host 0.0.0.0 --port 5004 --serve-artifacts
 
 # 8. Start the Flask application
 python app.py
@@ -115,6 +128,275 @@ python http_server.py
 
 # 10. (Phase 2) Start the gRPC server in another separate terminal  
 python grpc_server.py
+
+# 11. (Phase 5) Create TensorFlow SavedModel for TensorFlow Serving
+python scripts/keras_export_savedmodel.py
+
+# 12. (Phase 5) Install and Start TensorFlow Serving
+
+## Install TensorFlow Model Server on Mac:
+
+### Option 1: Using Docker (Recommended)
+
+#### For Mac M1/M2 (ARM64) - RECOMMENDED:
+```bash
+# Use native Python TensorFlow Serving alternative (works perfectly on ARM64)
+python tf_serving_local.py
+
+# Note: Docker TensorFlow Serving has compatibility issues on Apple Silicon
+# The Python alternative provides the same REST API and runs natively
+```
+
+#### For Intel Mac (x86_64):
+```bash
+# Pull standard TensorFlow Serving Docker image
+docker pull tensorflow/serving
+
+# Run TensorFlow Serving with your model
+docker run -t --rm -p 8501:8501 \
+    -v "$(pwd)/models/iris_tensorflow_savedmodel:/models/iris" \
+    -e MODEL_NAME=iris \
+    tensorflow/serving
+```
+
+#### Alternative: Emulation (slower but compatible)
+```bash
+# Force x86_64 emulation on ARM64 Mac (slower)
+docker run --platform linux/amd64 -t --rm -p 8501:8501 \
+    -v "$(pwd)/models/iris_tensorflow_savedmodel:/models/iris" \
+    -e MODEL_NAME=iris \
+    tensorflow/serving
+```
+
+### Option 2: Build from Source (Advanced)
+```bash
+# Install Bazel build tool
+brew install bazel
+
+# Clone TensorFlow Serving repository
+git clone https://github.com/tensorflow/serving
+cd serving
+
+# Build TensorFlow Model Server
+bazel build //tensorflow_serving/model_servers:tensorflow_model_server
+
+# Run the server
+bazel-bin/tensorflow_serving/model_servers/tensorflow_model_server \
+    --rest_api_port=8501 \
+    --model_name=iris \
+    --model_base_path=$(pwd)/../models/iris_tensorflow_savedmodel
+```
+
+### Option 3: Python TensorFlow Serving Alternative (Mac M1 Native)
+
+The `tf_serving_local.py` script has been created and provides a native ARM64 solution that mimics TensorFlow Serving's REST API:
+
+```bash
+# Start the native Python TensorFlow Serving alternative
+python tf_serving_local.py
+```
+
+This script provides:
+- Full TensorFlow Serving REST API compatibility
+- Native ARM64 performance (no emulation)
+- Same endpoints: `/v1/models/iris:predict`, `/v1/models/iris`, `/v1/models/iris/metadata`
+- Proper error handling and logging
+
+### Option 4: Direct Command (if binary available)
+```bash
+tensorflow_model_server --rest_api_port=8501 --model_name=iris --model_base_path=$(pwd)/models/iris_tensorflow_savedmodel
+```
+
+# 13. (Phase 5) Install and Start Triton Inference Server
+
+## Install Triton Inference Server on Mac:
+
+### Option 1: Using Docker (Recommended)
+
+#### For Mac M1/M2 (ARM64):
+```bash
+# Pull Triton Server container for ARM64
+docker pull nvcr.io/nvidia/tritonserver:24.01-py3
+
+# Run Triton Server
+docker run --rm -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+    -v "$(pwd)/triton_model_repository:/models" \
+    nvcr.io/nvidia/tritonserver:24.01-py3 tritonserver \
+    --model-repository=/models \
+    --http-port=8000
+
+# Note: GPU acceleration not available on Mac, CPU inference only
+```
+
+#### For Intel Mac (x86_64):
+```bash
+# Pull standard Triton Server container
+docker pull nvcr.io/nvidia/tritonserver:24.01-py3
+
+# Run Triton Server
+docker run --rm -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+    -v "$(pwd)/triton_model_repository:/models" \
+    nvcr.io/nvidia/tritonserver:24.01-py3 tritonserver \
+    --model-repository=/models \
+    --http-port=8000
+```
+
+### Option 2: Native Binary (Not Available for Mac)
+
+Unfortunately, NVIDIA does not provide native Triton Inference Server binaries for macOS. The `tritonserver` command requires Linux environment.
+
+### Option 3: Build from Source (Advanced, Linux VM Required)
+
+For development on Mac, consider using a Linux VM or cloud instance:
+
+```bash
+# On Linux VM/Cloud Instance:
+# Install dependencies
+apt-get update && apt-get install -y software-properties-common
+add-apt-repository ppa:deadsnakes/ppa
+apt-get update && apt-get install -y python3.8 python3.8-dev python3-pip
+
+# Clone and build Triton
+git clone https://github.com/triton-inference-server/server.git
+cd server
+python3 build.py --build-dir=/tmp/citritonbuild --cmake-build-type=Release --enable-logging --enable-stats --enable-tracing --enable-metrics --enable-gpu-metrics=false --backend=onnxruntime
+
+# Run the server
+/tmp/citritonbuild/install/bin/tritonserver --model-repository=$(pwd)/triton_model_repository --http-port=8000
+```
+
+### Option 4: Use Development Setup
+
+For Mac users who want to test the Triton integration without Docker:
+
+1. **Skip Triton Server**: The Flask app gracefully handles Triton unavailability
+2. **Test with other serving methods**: Direct ONNX and TensorFlow Serving work natively
+3. **Use Cloud/Remote Triton**: Connect to a remote Triton instance
+
+```bash
+# Test if Triton is available (will show graceful fallback)
+curl -X POST http://localhost:5001/api/v1/classify-triton \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+
+# Alternative: Test serving comparison (works without Triton)
+curl -X POST http://localhost:5001/api/v1/serving-comparison \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+```
+
+### Troubleshooting Triton Installation
+
+If you encounter the error `bash: tritonserver: command not found`, this is expected on Mac as there's no native binary. Use Docker instead:
+
+```bash
+# Verify Docker is installed
+docker --version
+
+# Pull and run Triton via Docker
+docker pull nvcr.io/nvidia/tritonserver:24.01-py3
+docker run --rm -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+    -v "$(pwd)/triton_model_repository:/models" \
+    nvcr.io/nvidia/tritonserver:24.01-py3 tritonserver \
+    --model-repository=/models --http-port=8000
+```
+
+### Common Triton Configuration Issues
+
+#### Issue 1: `max_queue_size` Deprecated Error
+```
+Error parsing text-format inference.ModelConfig: Message type "inference.ModelDynamicBatching" has no field named "max_queue_size".
+```
+
+**Solution**: In Triton 24.01+, `max_queue_size` has been moved to `default_queue_policy`:
+
+```protobuf
+# Before (deprecated)
+dynamic_batching {
+  max_queue_size: 100
+}
+
+# After (Triton 24.01+)
+dynamic_batching {
+  default_queue_policy {
+    max_queue_size: 100
+  }
+}
+```
+
+#### Issue 2: ONNX Model Compatibility
+```
+Unsupported ONNX Type 'ONNX_TYPE_SEQUENCE' for I/O 'output_probability', expected 'ONNX_TYPE_TENSOR'.
+```
+
+**Solution**: Use the improved ONNX model that outputs tensors instead of sequences:
+```bash
+# Replace the model with the tensor-compatible version
+cp models/iris_classifier_improved.onnx triton_model_repository/iris_onnx/1/model.onnx
+```
+
+#### Issue 3: Model Configuration Auto-Completion
+For complex models, let Triton auto-detect the configuration:
+
+```protobuf
+name: "iris_onnx"
+platform: "onnxruntime_onnx"
+max_batch_size: 32
+
+# Dynamic batching configuration
+dynamic_batching {
+  max_queue_delay_microseconds: 100
+  preferred_batch_size: [ 4, 8 ]
+  default_queue_policy {
+    max_queue_size: 100
+  }
+}
+```
+
+### Verify Triton Installation
+
+Once running, verify the server status:
+
+```bash
+# Check server health
+curl http://localhost:8000/v2/health/ready
+
+# List available models (correct endpoint)
+curl -X POST http://localhost:8000/v2/repository/index
+
+# Get model configuration
+curl http://localhost:8000/v2/models/iris_onnx/config
+
+# Get model metadata  
+curl http://localhost:8000/v2/models/iris_onnx
+```
+
+Expected outputs:
+
+**Health check**: Returns empty response with HTTP 200 status if healthy.
+
+**Model list**:
+```json
+[{"name":"iris_onnx","version":"1","state":"READY"}]
+```
+
+**Model metadata**:
+```json
+{
+  "name": "iris_onnx",
+  "versions": ["1"],
+  "platform": "onnxruntime_onnx",
+  "inputs": [...],
+  "outputs": [...]
+}
+```
+
+**Test inference**:
+```bash
+# Test Triton inference via Flask app
+curl -X POST http://localhost:5001/api/v1/classify-triton \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
 ```
 
 ## 📡 API Endpoints
@@ -492,6 +774,116 @@ Content-Type: application/json
 POST /api/v1/classify-registry?model_format=sklearn&stage=Production
 ```
 
+### Phase 5 Endpoints
+
+#### TensorFlow Serving Classification
+
+```bash
+# TensorFlow Serving Classification
+curl -X POST http://localhost:5001/api/v1/classify-tf-serving \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sepal_length": 5.1,
+    "sepal_width": 3.5,
+    "petal_length": 1.4,
+    "petal_width": 0.2
+  }'
+
+# Response includes serving infrastructure details
+{
+  "predicted_class": "setosa",
+  "predicted_class_index": 0,
+  "probabilities": [0.98, 0.01, 0.01],
+  "confidence": 0.98,
+  "serving_infrastructure": "tensorflow_serving",
+  "model_version": 1,
+  "response_time_ms": 25.3
+}
+```
+
+#### Triton Inference Server Classification
+
+```bash
+# Triton Inference Server Classification
+curl -X POST http://localhost:5001/api/v1/classify-triton \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sepal_length": 6.4,
+    "sepal_width": 3.2,
+    "petal_length": 4.5,
+    "petal_width": 1.5
+  }'
+
+# Response includes Triton-specific optimizations
+{
+  "predicted_class": "versicolor",
+  "predicted_class_index": 1,
+  "probabilities": [0.02, 0.95, 0.03],
+  "confidence": 0.95,
+  "serving_infrastructure": "triton_inference_server",
+  "model_version": "1",
+  "response_time_ms": 18.7,
+  "batch_size": 1
+}
+```
+
+#### Serving Infrastructure Performance Comparison
+
+```bash
+# Serving Infrastructure Performance Comparison
+curl -X POST http://localhost:5001/api/v1/serving-comparison \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sepal_length": 6.3,
+    "sepal_width": 3.3,
+    "petal_length": 6.0,
+    "petal_width": 2.5,
+    "iterations": 5
+  }'
+
+# Response compares all serving methods
+{
+  "test_configuration": {
+    "sample": {...},
+    "iterations": 5
+  },
+  "serving_methods": {
+    "direct_onnx": {
+      "available": true,
+      "response_times_ms": [12.3, 11.8, 12.1, 11.9, 12.0],
+      "average_response_time_ms": 12.02,
+      "success_rate": 1.0,
+      "infrastructure": "direct_onnx_runtime"
+    },
+    "tensorflow_serving": {
+      "available": true,
+      "response_times_ms": [25.1, 24.8, 25.3, 24.9, 25.0],
+      "average_response_time_ms": 25.02,
+      "success_rate": 1.0,
+      "infrastructure": "tensorflow_serving"
+    },
+    "triton_inference": {
+      "available": true,
+      "response_times_ms": [18.2, 17.9, 18.5, 18.1, 18.0],
+      "average_response_time_ms": 18.14,
+      "success_rate": 1.0,
+      "infrastructure": "triton_inference_server"
+    }
+  },
+  "performance_analysis": {
+    "fastest_method": "direct_onnx",
+    "fastest_avg_time_ms": 12.02,
+    "slowest_method": "tensorflow_serving",
+    "slowest_avg_time_ms": 25.02,
+    "speedup_factor": 2.08,
+    "recommendations": [
+      "Direct ONNX is fastest for single requests with minimal overhead",
+      "Performance difference: 2.1x between fastest and slowest"
+    ]
+  }
+}
+```
+
 ## 🔄 Batch Processing
 
 ### Create Sample Files
@@ -542,16 +934,38 @@ ai-backends-py/
 
 ## 🗃️ MLflow Model Registry Management
 
+### Prerequisites for MLflow Integration
+
+**IMPORTANT**: For model artifact serving to work properly, MLflow server must be started with the `--serve-artifacts` flag:
+
+```bash
+# ✅ Correct way to start MLflow server (enables artifact serving)
+mlflow server --host 0.0.0.0 --port 5004 --serve-artifacts
+
+# ❌ Incorrect - without --serve-artifacts, model downloads will fail
+mlflow server --host 0.0.0.0 --port 5004
+```
+
+The `--serve-artifacts` flag is essential for:
+- Model artifact download from the registry
+- Cross-language model serving (Python to TypeScript)
+- Production deployment workflows
+
 ### Model Registration & Training
 ```bash
 # Train models and register with MLflow (includes both sklearn and ONNX formats)
 python scripts/train_iris_model.py
 
+# OR: Train tensor-only ONNX model specifically for TypeScript compatibility
+python scripts/train_iris_model_improved.py
+
 # This will:
 # 1. Train RandomForestClassifier on Iris dataset  
 # 2. Log metrics, parameters, and metadata to MLflow
 # 3. Register both sklearn and ONNX models in the registry
-# 4. Demonstrate security differences between pickle and ONNX formats
+# 4. Create tensor-only ONNX models for onnxruntime-node compatibility
+# 5. Demonstrate security differences between pickle and ONNX formats
+# 6. Set up model aliases for production deployment
 ```
 
 ### Model Management CLI
@@ -951,3 +1365,51 @@ With the fair architecture, you should now see:
 - **gRPC 2.5x-10x faster**: For larger payloads, high concurrency, or streaming
 - **HTTP/2 advantages**: Binary Protocol Buffers vs JSON serialization
 - **Educational alignment**: Matches module learning objectives
+
+## 🏗️ Phase 5: Production Serving Architecture Comparison
+
+### **Serving Infrastructure Evolution**
+
+| Approach | Use Case | Advantages | Disadvantages |
+|----------|----------|------------|---------------|
+| **Direct ONNX Loading** | Prototypes, Simple Apps | Minimal overhead, Easy setup | No batching, Limited optimization |
+| **TensorFlow Serving** | TF-specific production | Built-in versioning, TF optimization | Framework-specific, More complex setup |
+| **Triton Inference Server** | High-performance production | Framework-agnostic, Dynamic batching, Concurrent execution | Complex setup, Resource intensive |
+
+### **Performance Characteristics**
+
+- **Latency**: Direct ONNX < Triton < TensorFlow Serving (for single requests)
+- **Throughput**: Triton (with batching) > TensorFlow Serving > Direct ONNX
+- **Resource Utilization**: Triton > TensorFlow Serving > Direct ONNX
+- **Scalability**: Triton > TensorFlow Serving > Direct ONNX
+
+### **Dynamic Batching Benefits**
+
+Run the dynamic batching demo to see Triton's performance advantages:
+
+```bash
+# Test dynamic batching performance
+python scripts/test_dynamic_batching.py --num-requests 50 --max-workers 10
+
+# Expected results:
+# - Sequential requests: ~20 req/s
+# - Concurrent requests (batched): ~80-150 req/s
+# - Batching improvement: 4x-8x throughput increase
+```
+
+### **When to Use Each Approach**
+
+#### **Direct ONNX Loading**
+- **Best for**: Prototypes, single-user applications, simple deployments
+- **Pros**: Minimal setup, fastest single-request latency
+- **Cons**: No automatic batching, limited scalability
+
+#### **TensorFlow Serving**
+- **Best for**: TensorFlow-native applications, moderate scale
+- **Pros**: Built-in model versioning, TensorFlow optimization
+- **Cons**: TensorFlow-specific, moderate setup complexity
+
+#### **Triton Inference Server**
+- **Best for**: High-traffic production, multi-framework environments
+- **Pros**: Framework-agnostic, dynamic batching, highest throughput
+- **Cons**: Complex setup, higher resource requirements

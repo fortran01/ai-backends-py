@@ -16,12 +16,17 @@ Following the coding guidelines:
 
 import logging
 import time
+import sys
+import os
+import threading
 from concurrent import futures
 from typing import Any, Optional
 
 import grpc
 import numpy as np
 import onnxruntime as ort
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # Import generated gRPC files
 import proto.inference_pb2 as inference_pb2
@@ -36,6 +41,28 @@ _onnx_session: Optional[ort.InferenceSession] = None
 
 # Iris dataset class names
 IRIS_CLASSES = ['setosa', 'versicolor', 'virginica']
+
+# Global flag for server restart
+_restart_server = False
+
+
+class FileChangeHandler(FileSystemEventHandler):
+    """Handler for file system events to restart server on changes."""
+    
+    def on_modified(self, event):
+        """Handle file modification events."""
+        global _restart_server
+        
+        if event.is_directory:
+            return
+        
+        # Only restart on Python file changes, excluding __pycache__
+        if (event.src_path.endswith('.py') and 
+            '__pycache__' not in event.src_path and
+            '.pyc' not in event.src_path):
+            file_name = os.path.basename(event.src_path)
+            logger.info(f"🔄 File changed: {file_name} - Restarting server...")
+            _restart_server = True
 
 
 def get_onnx_session() -> ort.InferenceSession:
@@ -122,14 +149,9 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
                 # Run inference
                 results = session.run(output_names, {input_name: features_array})
                 
-                # Parse results from sklearn RandomForest ONNX export
+                # Parse results from ONNX model with dual outputs
                 predicted_class_index: int = int(results[0][0])  # Class prediction
-                prob_dict = results[1][0]  # Probability dictionary {class_idx: prob}
-                
-                # Convert probability dictionary to ordered array matching IRIS_CLASSES
-                raw_probabilities: np.ndarray = np.array([
-                    prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
-                ])
+                raw_probabilities: np.ndarray = results[1][0]  # Probability array
                 
                 # Normalize probabilities to ensure they sum to 1.0
                 prob_sum: float = float(np.sum(raw_probabilities))
@@ -177,45 +199,77 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             return inference_pb2.ClassifyResponse()
 
 
-def serve() -> None:
+def serve_with_reload() -> None:
     """
-    Start the gRPC server for inference services.
+    Start the gRPC server with file watching for auto-reload.
     
     The server runs on port 50051 and provides high-performance
     binary protocol access to the iris classification model.
     """
-    # Create gRPC server with thread pool
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    global _restart_server
     
-    # Add our servicer to the server
-    inference_pb2_grpc.add_InferenceServiceServicer_to_server(InferenceServicer(), server)
-    
-    # Listen on port 50051
-    listen_addr = '[::]:50051'
-    server.add_insecure_port(listen_addr)
-    
-    # Start the server
-    server.start()
-    
-    print("🚀 gRPC Inference Server started")
-    print(f"📡 Listening on {listen_addr}")
-    print("🔌 Available services:")
-    print("   - InferenceService.Classify - High-performance iris classification")
-    print("🎯 Features demonstrated:")
-    print("   - Protocol Buffers binary serialization")
-    print("   - High-performance gRPC communication")
-    print("   - Concurrent request handling with thread pool")
-    print("   - Production-ready error handling and logging")
-    print("💡 Test with gRPC client or performance comparison endpoint")
-    print("⏹️  Press Ctrl+C to stop the server")
-    
-    try:
-        # Keep the server running
-        server.wait_for_termination()
-    except KeyboardInterrupt:
-        print("\n🛑 Stopping gRPC server...")
-        server.stop(grace=5.0)
-        print("✅ gRPC server stopped")
+    while True:
+        _restart_server = False
+        
+        # Set up file watcher
+        event_handler = FileChangeHandler()
+        observer = Observer()
+        observer.schedule(event_handler, path='.', recursive=True)
+        observer.start()
+        
+        # Create gRPC server with thread pool
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        
+        # Add our servicer to the server
+        inference_pb2_grpc.add_InferenceServiceServicer_to_server(InferenceServicer(), server)
+        
+        # Listen on port 50051
+        listen_addr = '[::]:50051'
+        server.add_insecure_port(listen_addr)
+        
+        # Start the server
+        server.start()
+        
+        print("🚀 gRPC Inference Server started (with auto-reload)")
+        print(f"📡 Listening on {listen_addr}")
+        print("🔌 Available services:")
+        print("   - InferenceService.Classify - High-performance iris classification")
+        print("🎯 Features demonstrated:")
+        print("   - Protocol Buffers binary serialization")
+        print("   - High-performance gRPC communication")
+        print("   - Concurrent request handling with thread pool")
+        print("   - Production-ready error handling and logging") 
+        print("   - Auto-reload on file changes 🔄")
+        print("💡 Test with gRPC client or performance comparison endpoint")
+        print("⏹️  Press Ctrl+C to stop the server")
+        
+        try:
+            # Keep checking for restart flag
+            while not _restart_server:
+                time.sleep(0.1)
+            
+            # Stop the server for restart
+            print("\n🔄 Restarting server...")
+            server.stop(grace=2.0)
+            observer.stop()
+            observer.join()
+            
+            # Clear the ONNX session cache for fresh reload
+            global _onnx_session
+            _onnx_session = None
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Stopping gRPC server...")
+            server.stop(grace=5.0)
+            observer.stop()
+            observer.join()
+            print("✅ gRPC server stopped")
+            break
+
+
+def serve() -> None:
+    """Legacy serve function for backward compatibility."""
+    serve_with_reload()
 
 
 if __name__ == '__main__':

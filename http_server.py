@@ -120,9 +120,9 @@ def perform_inference(features_array: np.ndarray) -> Dict[str, Any]:
         results = session.run(output_names, {input_name: features_array})
         inference_time: float = (time.time() - start_time) * 1000  # Convert to ms
         
-        # Handle improved model with dual outputs
+        # Handle model with dual outputs (current format)
         if len(results) >= 2:
-            # Extract predictions and probabilities from improved model
+            # Extract predictions and probabilities
             # Output 0: label (class index), Output 1: probabilities (array)
             label_output = results[0]
             probability_output = results[1]
@@ -141,14 +141,10 @@ def perform_inference(features_array: np.ndarray) -> Dict[str, Any]:
                 probabilities = probability_output
                 
         else:
-            # Fallback for original model format
+            # Fallback for single output models
             predicted_class_index = int(results[0][0])
-            prob_dict = results[1][0] if len(results) > 1 else {}
-            
-            # Convert probability dictionary to ordered array
-            probabilities = np.array([
-                prob_dict.get(i, 0.0) for i in range(len(IRIS_CLASSES))
-            ])
+            # Create uniform probability distribution as fallback
+            probabilities = np.ones(len(IRIS_CLASSES)) / len(IRIS_CLASSES)
         
         # Normalize probabilities to ensure they sum to 1.0
         prob_sum: float = float(np.sum(probabilities))
@@ -343,5 +339,11 @@ if __name__ == '__main__':
         logger.warning(f"Could not pre-load model: {e}")
         logger.info("Model will be loaded on first request")
     
-    # Run Flask development server on port 5002 (different from main Flask app on 5001)
-    app.run(host='0.0.0.0', port=5002, debug=False, threaded=True)
+    # Run Flask development server on port 5002 with auto-reload enabled
+    app.run(
+        host='0.0.0.0', 
+        port=5002, 
+        debug=True, 
+        use_reloader=True,
+        threaded=True
+    )
