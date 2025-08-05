@@ -78,6 +78,9 @@ _redis_client: Optional[redis.Redis] = None
 OLLAMA_BASE_URL: str = "http://localhost:11434"
 OLLAMA_MODEL: str = "tinyllama"
 
+# Ollama timeout configuration - longer timeout for CI/testing environments
+OLLAMA_TIMEOUT: int = 60 if os.getenv('PYTEST_CURRENT_TEST') else 30
+
 # Iris dataset class names for prediction interpretation
 IRIS_CLASSES: List[str] = ['setosa', 'versicolor', 'virginica']
 
@@ -324,7 +327,7 @@ def call_ollama_with_history(prompt: str, memory: ConversationBufferMemory) -> s
     response = requests.post(
         f"{OLLAMA_BASE_URL}/api/generate",
         json=ollama_request,
-        timeout=30
+        timeout=OLLAMA_TIMEOUT
     )
     response.raise_for_status()
     
@@ -626,7 +629,7 @@ def call_ollama_api(prompt: str) -> str:
     response = requests.post(
         f"{OLLAMA_BASE_URL}/api/generate",
         json=ollama_request,
-        timeout=30
+        timeout=OLLAMA_TIMEOUT
     )
     response.raise_for_status()
     
@@ -1453,7 +1456,7 @@ def generate() -> Response:
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json=ollama_request,
                 stream=True,
-                timeout=30
+                timeout=OLLAMA_TIMEOUT
             )
             response.raise_for_status()
         except requests.exceptions.ConnectionError:
@@ -1578,7 +1581,7 @@ Response:"""
             response = requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json=ollama_request,
-                timeout=30
+                timeout=OLLAMA_TIMEOUT
             )
             response.raise_for_status()
             
@@ -2614,7 +2617,7 @@ def generate_v2() -> Response:
             response = requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json=ollama_request,
-                timeout=30
+                timeout=OLLAMA_TIMEOUT
             )
             response.raise_for_status()
             response_data = response.json()
