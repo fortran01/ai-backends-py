@@ -28,7 +28,6 @@ import numpy as np
 import requests
 import onnxruntime as ort
 import grpc
-from concurrent import futures
 from flask import Flask, request, jsonify, Response, stream_with_context, Blueprint
 import redis
 import pandas as pd
@@ -39,7 +38,7 @@ from fastembed import TextEmbedding
 import hashlib
 
 # Phase 4: Drift monitoring and MLflow imports
-from evidently import Report, ColumnType
+from evidently import Report
 from evidently.metrics import ValueDrift, DriftedColumnsCount
 import mlflow
 import mlflow.pyfunc
@@ -48,7 +47,7 @@ import mlflow.sklearn
 # LangChain imports for Phase 2
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
-from langchain.schema import BaseMessage, HumanMessage, AIMessage
+from langchain.schema import HumanMessage, AIMessage
 
 # gRPC imports for Phase 2
 import proto.inference_pb2 as inference_pb2
@@ -151,7 +150,7 @@ def get_onnx_session() -> ort.InferenceSession:
             logger.info("ONNX model loaded successfully")
         except FileNotFoundError:
             logger.error(f"ONNX model file not found at {model_path}")
-            raise FileNotFoundError(f"Model file not found. Please run 'python scripts/train_iris_model.py' first.")
+            raise FileNotFoundError("Model file not found. Please run 'python scripts/train_iris_model.py' first.")
         except Exception as e:
             logger.error(f"Error loading ONNX model: {e}")
             raise RuntimeError(f"Failed to load ONNX model: {e}")
@@ -254,7 +253,7 @@ def get_pickle_model() -> Any:
             logger.info("Pickle model loaded successfully")
         except FileNotFoundError:
             logger.error(f"Pickle model file not found at {model_path}")
-            raise FileNotFoundError(f"Model file not found. Please run 'python scripts/train_iris_model.py' first.")
+            raise FileNotFoundError("Model file not found. Please run 'python scripts/train_iris_model.py' first.")
         except Exception as e:
             logger.error(f"Error loading pickle model: {e}")
             raise RuntimeError(f"Failed to load pickle model: {e}")
@@ -395,7 +394,6 @@ class SemanticCache:
     
     def _compute_cosine_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
         """Compute cosine similarity between two embeddings."""
-        import math
         
         # Convert to numpy arrays for easier computation
         a = np.array(embedding1)
@@ -694,7 +692,7 @@ def call_http_classify(sepal_length: float, sepal_width: float, petal_length: fl
             
     except requests.exceptions.ConnectionError as e:
         logger.error(f"HTTP server connection error: {e}")
-        raise Exception(f"HTTP inference server is unavailable. Please ensure the HTTP server is running on port 5002.")
+        raise Exception("HTTP inference server is unavailable. Please ensure the HTTP server is running on port 5002.")
     except requests.exceptions.Timeout as e:
         logger.error(f"HTTP server timeout: {e}")
         raise Exception(f"HTTP server request timed out: {str(e)}")
@@ -823,7 +821,7 @@ def classify_http() -> Response:
             result["protocol"] = "HTTP"
             result["processing_time_ms"] = round(processing_time * 1000, 2)
             
-            logger.info(f"HTTP classification completed in {processing_time*1000:.2f}ms")
+            logger.info(f"HTTP classification completed in {processing_time * 1000:.2f}ms")
             return jsonify(result)
             
         except Exception as e:
@@ -904,7 +902,7 @@ def classify_grpc() -> Response:
             result["protocol"] = "gRPC"
             result["processing_time_ms"] = round(processing_time * 1000, 2)
             
-            logger.info(f"gRPC classification completed in {processing_time*1000:.2f}ms")
+            logger.info(f"gRPC classification completed in {processing_time * 1000:.2f}ms")
             return jsonify(result)
             
         except Exception as e:
@@ -1765,9 +1763,9 @@ def drift_report() -> Response:
         limit: int = int(request.args.get('limit', 100))
         
         # Check if we're in testing environment (Flask testing mode)
-        is_testing: bool = (os.environ.get('FLASK_ENV') == 'testing' or 
-                           os.environ.get('PYTEST_CURRENT_TEST') is not None or
-                           'pytest' in sys.modules)
+        is_testing: bool = (os.environ.get('FLASK_ENV') == 'testing' or
+                            os.environ.get('PYTEST_CURRENT_TEST') is not None or
+                            'pytest' in sys.modules)
         
         # Check if production log file exists
         if not os.path.exists(PRODUCTION_LOG_FILE):
@@ -2230,9 +2228,9 @@ def classify_registry() -> Response:
         model_name: str = f"iris-classifier-{model_format}"
         
         # Check if we're in testing environment
-        is_testing: bool = (os.environ.get('FLASK_ENV') == 'testing' or 
-                           os.environ.get('PYTEST_CURRENT_TEST') is not None or
-                           'pytest' in sys.modules)
+        is_testing: bool = (os.environ.get('FLASK_ENV') == 'testing' or
+                            os.environ.get('PYTEST_CURRENT_TEST') is not None or
+                            'pytest' in sys.modules)
         
         # Set MLflow tracking URI
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -2314,7 +2312,17 @@ def classify_registry() -> Response:
                         logger.info(f"Mock sklearn model prediction: {predicted_class}")
                         
                         # Log mock prediction for drift monitoring
-                        log_prediction_to_csv(features_array[0], predicted_class_index, confidence)
+                        features_dict = {
+                            'sepal_length': features_array[0][0],
+                            'sepal_width': features_array[0][1],
+                            'petal_length': features_array[0][2],
+                            'petal_width': features_array[0][3]
+                        }
+                        prediction_dict = {
+                            'predicted_class': predicted_class,
+                            'confidence': confidence
+                        }
+                        log_classification_request(features_dict, prediction_dict)
                         
                         return jsonify({
                             "predicted_class": predicted_class,
@@ -2526,6 +2534,7 @@ def health_check() -> Response:
 def not_found(error) -> Response:
     """Handle 404 errors with API-appropriate response."""
     return jsonify({"error": "Endpoint not found"}), 404
+
 
 
 @app.errorhandler(405)
