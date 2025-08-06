@@ -343,6 +343,8 @@ def get_or_create_memory(session_id: str) -> ConversationBufferMemory:
     return _conversation_memories[session_id]
 
 
+
+
 def initialize_rag_system() -> bool:
     """
     Initialize the RAG (Retrieval-Augmented Generation) system.
@@ -402,7 +404,7 @@ def initialize_rag_system() -> bool:
         
         # Create query engine with default settings optimized for smaller models
         _rag_query_engine = _rag_index.as_query_engine(
-            similarity_top_k=5,
+            similarity_top_k=2,
             response_mode="compact",  # Use compact mode 
             streaming=False
         )
@@ -415,7 +417,7 @@ def initialize_rag_system() -> bool:
 
 Question: {query_str}
 
-Answer the question based on the context above. Be concise and accurate.
+Based only on the context above, answer the question. If the information is not in the context, say "I don't have that information."
 Answer:"""
 
         simple_prompt = PromptTemplate(simple_template)
@@ -3682,7 +3684,7 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=5001,
         debug=True,
-        use_reloader=True,
+        use_reloader=False,
         # Additional options for better development experience
         threaded=True,  # Handle multiple requests concurrently
         use_debugger=True  # Enable interactive debugger on errors
