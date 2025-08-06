@@ -1,4 +1,4 @@
-# AI Back-End Demo: Python/Flask Project - Phase 4
+# AI Back-End Demo: Python/Flask Project - Phase 6
 
 [![CI/CD Pipeline](https://github.com/your-username/ai-backends-py/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/your-username/ai-backends-py/actions)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
@@ -7,12 +7,14 @@
 [![End-to-end tested with Playwright](https://img.shields.io/badge/e2e%20tested%20with-playwright-green.svg)](https://playwright.dev/)
 [![MLflow](https://img.shields.io/badge/mlflow-2.9%2B%20%7C%203.x-blue.svg)](https://mlflow.org/)
 [![Evidently AI](https://img.shields.io/badge/evidently-0.4%2B-orange.svg)](https://evidentlyai.com/)
+[![LlamaIndex](https://img.shields.io/badge/llamaindex-0.10%2B-purple.svg)](https://www.llamaindex.ai/)
+[![ChromaDB](https://img.shields.io/badge/chromadb-0.4%2B-green.svg)](https://www.trychroma.com/)
 
-This project demonstrates **Phase 5** of the AI Back-End architecture course, implementing dedicated model serving infrastructure that provides production-grade optimizations beyond direct model loading in applications. This phase showcases the evolution from prototype to production-grade serving infrastructure.
+This project demonstrates **Phase 6** of the AI Back-End architecture course, implementing advanced LLM orchestration with Retrieval-Augmented Generation (RAG). This phase showcases how to build production-grade RAG systems that combine vector databases, semantic search, and language models for intelligent question-answering over large knowledge bases.
 
-## 🎯 Phase 5 Objectives
+## 🎯 Phase 6 Objectives
 
-**Goal:** Showcase dedicated model serving frameworks that provide production-grade optimizations beyond direct model loading in the application, demonstrating the performance characteristics and trade-offs between different serving architectures.
+**Goal:** Build a complete Retrieval-Augmented Generation (RAG) application that demonstrates advanced, stateful LLM patterns including document ingestion, vector storage, semantic retrieval, and context-aware response generation.
 
 ## 🚀 Features Implemented
 
@@ -69,6 +71,17 @@ This project demonstrates **Phase 5** of the AI Back-End architecture course, im
 37. **Dynamic Batching Demo Script** - `scripts/test_dynamic_batching.py` demonstrating batching performance benefits
 38. **Serving Architecture Analysis** - Comprehensive comparison of direct loading vs dedicated serving
 
+### ✅ Phase 6 Completed Tasks
+
+39. **RAG Framework Setup** - Complete LlamaIndex integration with ChromaDB vector database
+40. **Knowledge Base Creation** - Comprehensive AI/ML knowledge base document with 15+ topic areas
+41. **Document Ingestion Pipeline** - Automated document loading, chunking, and embedding generation
+42. **Vector Database Integration** - ChromaDB setup with semantic search and similarity matching
+43. **RAG Chat Endpoint** - `/api/v1/rag-chat` endpoint with full retrieval-augmented generation
+44. **Knowledge Base Setup Script** - `scripts/setup_rag_knowledge_base.py` for automated RAG system initialization
+45. **Semantic Retrieval System** - Vector similarity search with configurable source limits and metadata
+46. **Context-Aware Response Generation** - LLM integration with retrieved context for informed answers
+
 ### 🔒 Security Features
 
 - **Prompt Injection Detection** - Pattern-based detection of malicious prompts
@@ -93,6 +106,7 @@ This project demonstrates **Phase 5** of the AI Back-End architecture course, im
 5. **MLflow** server running (for Phase 4 model registry)
 6. **TensorFlow Serving** installed (for Phase 5 dedicated serving)
 7. **Triton Inference Server** installed (for Phase 5 high-performance serving)
+8. **RAG Dependencies** installed (for Phase 6 knowledge base chat)
 
 ### Setup Instructions
 
@@ -104,8 +118,11 @@ cd ai-backends-py
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# 3. Install dependencies
+# 3. Install dependencies (resolves protobuf version conflicts)
 pip install -r requirements.txt
+
+# Note: If you encounter protobuf conflicts between TensorFlow and LlamaIndex:
+# pip install "protobuf>=4.25.0,<5.0.0" --force-reinstall
 
 # 4. Train the Iris model (creates ONNX and pickle files)
 python scripts/train_iris_model.py
@@ -129,10 +146,13 @@ python http_server.py
 # 10. (Phase 2) Start the gRPC server in another separate terminal  
 python grpc_server.py
 
-# 11. (Phase 5) Create TensorFlow SavedModel for TensorFlow Serving
+# 11. (Phase 6) Set up RAG knowledge base for intelligent Q&A
+python scripts/setup_rag_knowledge_base.py
+
+# 12. (Phase 5) Create TensorFlow SavedModel for TensorFlow Serving
 python scripts/keras_export_savedmodel.py
 
-# 12. (Phase 5) Install and Start TensorFlow Serving
+# 13. (Phase 5) Install and Start TensorFlow Serving
 
 ## Install TensorFlow Model Server on Mac:
 
@@ -884,6 +904,71 @@ curl -X POST http://localhost:5001/api/v1/serving-comparison \
 }
 ```
 
+### Phase 6 Endpoints
+
+#### RAG (Retrieval-Augmented Generation) Chat
+
+```bash
+# RAG-powered question answering with knowledge base retrieval
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is machine learning and how does it work?",
+    "max_sources": 5,
+    "include_sources": true
+  }'
+
+# Response includes intelligent answer with retrieved context
+{
+  "query": "What is machine learning and how does it work?",
+  "response": "Machine Learning (ML) is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed for every scenario. ML algorithms build mathematical models based on training data to make predictions...",
+  "processing_time_ms": 1250.5,
+  "rag_metadata": {
+    "retrieval_method": "vector_similarity",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "llm_model": "tinyllama",
+    "max_sources_requested": 5
+  },
+  "sources": [
+    {
+      "source_id": 1,
+      "content_preview": "Machine Learning (ML) is a subset of artificial intelligence (AI) that enables computers to learn and make decisions from data without being explicitly programmed...",
+      "similarity_score": 0.85,
+      "metadata": {
+        "chunk_id": 0,
+        "filename": "knowledge_base.md",
+        "file_type": "markdown"
+      }
+    }
+  ],
+  "source_count": 5
+}
+```
+
+#### RAG System Examples
+
+```bash
+# Ask about different ML concepts
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Explain the difference between supervised and unsupervised learning"}'
+
+# Query about deep learning
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are neural networks and how do they work?"}'
+
+# Ask about production ML concepts
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is model drift and how do you monitor it?"}'
+
+# Question about RAG itself
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How does Retrieval-Augmented Generation work?"}'
+```
+
 ## 🔄 Batch Processing
 
 ### Create Sample Files
@@ -1215,6 +1300,13 @@ curl -X POST http://localhost:5001/api/v1/classify \
 - **5.4:** Caching Inferences (both exact and semantic caching with vector embeddings)
 - **6.1:** Versioning and Deployment Strategies (API Versioning with Flask Blueprints)
 
+#### Phase 6 Concepts:
+- **7.1:** Retrieval-Augmented Generation (RAG) architecture and implementation
+- **7.2:** Vector databases and semantic search with ChromaDB
+- **7.3:** Document ingestion, chunking, and embedding generation pipelines
+- **7.4:** Advanced LLM orchestration with LlamaIndex framework
+- **7.5:** Knowledge base management and context-aware response generation
+
 ## ⚠️ Security Warnings
 
 1. **Never load pickle files from untrusted sources** - They can execute arbitrary code
@@ -1253,12 +1345,55 @@ The next phase will introduce:
 - **fastembed** - Fast text embeddings for semantic similarity
 - **hashlib** - Cryptographic hashing for cache keys (built-in)
 
+### Phase 6 Dependencies
+- **llama-index** - Advanced RAG framework with orchestration capabilities
+- **llama-index-llms-ollama** - Ollama integration for LlamaIndex
+- **llama-index-embeddings-huggingface** - HuggingFace embeddings for vector search
+- **chromadb** - Vector database for semantic search and storage
+- **pypdf** - PDF document processing for knowledge base ingestion
+- **python-docx** - Word document processing for knowledge base ingestion
+
 ### Testing Dependencies
 - **pytest** - Unit and integration testing framework
 - **pytest-playwright** - End-to-end testing with Playwright
 - **pytest-mock** - Mock utilities for testing
 - **pytest-cov** - Coverage reporting
 - **playwright** - Browser automation for E2E tests
+
+### Phase 6 RAG System Troubleshooting
+
+#### Protobuf Version Conflicts
+If you encounter dependency resolution errors during installation:
+
+```bash
+# Error: tensorflow requires protobuf<5.0.0 but you have protobuf 6.31.1
+pip install "protobuf>=4.25.0,<5.0.0" --force-reinstall
+
+# Ensure you're in the virtual environment
+source venv/bin/activate
+
+# Install missing LlamaIndex packages
+pip install llama-index-vector-stores-chroma==0.5.0
+```
+
+#### RAG Knowledge Base Setup
+```bash
+# Check ChromaDB status
+python check_chroma.py
+
+# If ChromaDB collection is empty, use the quick setup alternative
+python quick_rag_setup.py
+
+# Or run the improved setup script with StorageContext
+python scripts/setup_rag_knowledge_base.py
+
+# Test RAG endpoint
+python test_rag_endpoint.py
+```
+
+#### Common RAG Issues
+- **Empty ChromaDB collection**: Use `quick_rag_setup.py` as a working alternative
+- **LlamaIndex import errors**: Ensure all subpackages are installed correctly
 
 ## 🔧 Troubleshooting
 

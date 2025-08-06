@@ -169,3 +169,5 @@ data/
 
 # Pip installation artifacts
 =*
+
+chroma_db/

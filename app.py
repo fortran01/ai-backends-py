@@ -53,6 +53,20 @@ from langchain.schema import HumanMessage, AIMessage
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Phase 6: RAG (Retrieval-Augmented Generation) imports
+try:
+    from llama_index.core import VectorStoreIndex, Settings
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    from llama_index.core.embeddings import BaseEmbedding
+    from llama_index.llms.ollama import Ollama
+    import chromadb
+    from fastembed import TextEmbedding
+    RAG_AVAILABLE = True
+    logger.info("RAG modules loaded successfully")
+except ImportError as e:
+    logger.warning(f"RAG imports failed: {e}. RAG endpoints will be disabled.")
+    RAG_AVAILABLE = False
+
 # gRPC imports for Phase 2 - temporarily disabled due to protobuf compatibility
 try:
     import proto.inference_pb2 as inference_pb2
@@ -62,6 +76,40 @@ try:
 except ImportError as e:
     logger.warning(f"gRPC imports failed: {e}. gRPC endpoints will be disabled.")
     GRPC_AVAILABLE = False
+
+# Define FastEmbedWrapper only if RAG dependencies are available
+FastEmbedWrapper = None
+if RAG_AVAILABLE:
+    class FastEmbedWrapper(BaseEmbedding):
+        """
+        LlamaIndex wrapper for FastEmbed TextEmbedding model.
+        """
+        
+        def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.model_name = model_name
+            self._model = TextEmbedding(model_name=model_name)
+        
+        @classmethod
+        def class_name(cls) -> str:
+            return "FastEmbedWrapper"
+        
+        async def _aget_query_embedding(self, query: str) -> List[float]:
+            return self._get_query_embedding(query)
+        
+        def _get_query_embedding(self, query: str) -> List[float]:
+            embeddings = list(self._model.embed([query]))
+            return embeddings[0].tolist()
+        
+        def _get_text_embedding(self, text: str) -> List[float]:
+            return self._get_query_embedding(text)
+        
+        async def _aget_text_embedding(self, text: str) -> List[float]:
+            return self._get_text_embedding(text)
+        
+        def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+            embeddings = list(self._model.embed(texts))
+            return [embedding.tolist() for embedding in embeddings]
 
 app: Flask = Flask(__name__)
 
@@ -79,6 +127,11 @@ _pickle_model: Optional[Any] = None
 _conversation_memories: Dict[str, ConversationBufferMemory] = {}
 _text_embedding_model: Optional[TextEmbedding] = None
 _redis_client: Optional[redis.Redis] = None
+
+# Phase 6: RAG system global variables
+_rag_index: Optional[Any] = None  # VectorStoreIndex will be set if RAG_AVAILABLE
+_rag_query_engine: Optional[Any] = None
+_chroma_client: Optional[Any] = None
 
 # Ollama API configuration
 OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -288,6 +341,92 @@ def get_or_create_memory(session_id: str) -> ConversationBufferMemory:
         logger.info(f"Created new conversation memory for session: {session_id}")
     
     return _conversation_memories[session_id]
+
+
+def initialize_rag_system() -> bool:
+    """
+    Initialize the RAG (Retrieval-Augmented Generation) system.
+    
+    Loads the vector index from ChromaDB and sets up the query engine
+    for knowledge base retrieval and question answering.
+    
+    Returns:
+        bool: True if initialization successful, False otherwise
+    """
+    global _rag_index, _rag_query_engine, _chroma_client
+    
+    if not RAG_AVAILABLE:
+        logger.warning("RAG system not available - dependencies not installed")
+        return False
+    
+    try:
+        logger.info("Initializing RAG system...")
+        
+        # Initialize ChromaDB client
+        chroma_db_path = "./chroma_db"
+        collection_name = "ai_ml_knowledge_base"
+        
+        _chroma_client = chromadb.PersistentClient(path=chroma_db_path)
+        
+        # Check if collection exists
+        try:
+            collection = _chroma_client.get_collection(name=collection_name)
+            document_count = collection.count()
+            
+            if document_count == 0:
+                logger.warning("RAG knowledge base is empty. Run 'python scripts/setup_rag_knowledge_base.py' first.")
+                return False
+                
+            logger.info(f"Found RAG collection with {document_count} documents")
+            
+        except Exception:
+            logger.warning("RAG knowledge base not found. Run 'python scripts/setup_rag_knowledge_base.py' first.")
+            return False
+        
+        # Initialize embedding model
+        if FastEmbedWrapper is None:
+            logger.error("FastEmbedWrapper not available - RAG dependencies missing")
+            return False
+            
+        embedding_model = FastEmbedWrapper(
+            model_name="BAAI/bge-small-en-v1.5"
+        )
+        
+        # Configure LlamaIndex settings
+        Settings.embed_model = embedding_model
+        Settings.llm = Ollama(model="tinyllama", base_url=OLLAMA_BASE_URL)
+        
+        # Create vector store and index
+        vector_store = ChromaVectorStore(chroma_collection=collection)
+        _rag_index = VectorStoreIndex.from_vector_store(vector_store)
+        
+        # Create query engine with default settings optimized for smaller models
+        _rag_query_engine = _rag_index.as_query_engine(
+            similarity_top_k=5,
+            response_mode="compact",  # Use compact mode 
+            streaming=False
+        )
+        
+        # Apply simple custom prompt template optimized for TinyLlama
+        from llama_index.core import PromptTemplate
+        
+        # Simple, concise prompt template for TinyLlama
+        simple_template = """Context: {context_str}
+
+Question: {query_str}
+
+Answer the question based on the context above. Be concise and accurate.
+Answer:"""
+
+        simple_prompt = PromptTemplate(simple_template)
+        _rag_query_engine.update_prompts({"response_synthesizer:text_qa_template": simple_prompt})
+        
+        logger.info("RAG system initialized successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize RAG system: {e}")
+        return False
 
 
 def call_ollama_with_history(prompt: str, memory: ConversationBufferMemory) -> str:
@@ -1309,6 +1448,129 @@ def chat_semantic() -> Response:
         
     except Exception as e:
         logger.error(f"Unexpected error in /api/v1/chat-semantic: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/v1/rag-chat', methods=['POST'])
+def rag_chat() -> Response:
+    """
+    Phase 6: RAG (Retrieval-Augmented Generation) Chat Endpoint
+    
+    Implements a complete RAG pipeline that:
+    1. Takes a user query
+    2. Converts query to embeddings and retrieves relevant documents
+    3. Constructs context-aware prompt with retrieved information
+    4. Calls LLM with augmented prompt for informed responses
+    
+    Request Body:
+        {
+            "query": "What is machine learning?",
+            "max_sources": 5,  // optional, default 5
+            "include_sources": true  // optional, default true
+        }
+    
+    Returns:
+        JSON response with answer, sources, and metadata
+    
+    Raises:
+        400: Invalid request format or missing query
+        500: RAG system error or LLM unavailable
+    """
+    try:
+        # Parse request data
+        data: Dict[str, Any] = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Request body must be valid JSON"}), 400
+        
+        query: str = data.get('query', '').strip()
+        if not query:
+            return jsonify({"error": "Query is required and cannot be empty"}), 400
+        
+        max_sources: int = data.get('max_sources', 5)
+        include_sources: bool = data.get('include_sources', True)
+        
+        # Validate parameters
+        if not isinstance(max_sources, int) or max_sources < 1 or max_sources > 20:
+            return jsonify({"error": "max_sources must be an integer between 1 and 20"}), 400
+        
+        logger.info(f"RAG query received: {query}")
+        
+        # Check if RAG system is available
+        if not RAG_AVAILABLE:
+            return jsonify({
+                "error": "RAG system not available. Please install required dependencies.",
+                "hint": "Run: pip install llama-index llama-index-llms-ollama llama-index-embeddings-huggingface chromadb"
+            }), 500
+        
+        # Initialize RAG system if needed
+        global _rag_query_engine
+        if _rag_query_engine is None:
+            logger.info("Initializing RAG system for first use...")
+            if not initialize_rag_system():
+                return jsonify({
+                    "error": "RAG system initialization failed. Please ensure the knowledge base is set up.",
+                    "hint": "Run: python scripts/setup_rag_knowledge_base.py"
+                }), 500
+        
+        # Perform RAG query
+        start_time = time.time()
+        
+        try:
+            # Query the RAG system
+            response = _rag_query_engine.query(query)
+            
+            query_time = time.time() - start_time
+            
+            # Extract response text
+            response_text = str(response)
+            
+            # Prepare response data
+            rag_response = {
+                "query": query,
+                "response": response_text,
+                "processing_time_ms": round(query_time * 1000, 2),
+                "rag_metadata": {
+                    "retrieval_method": "vector_similarity",
+                    "embedding_model": "BAAI/bge-small-en-v1.5",
+                    "llm_model": "tinyllama",
+                    "max_sources_requested": max_sources
+                }
+            }
+            
+            # Add source information if requested
+            if include_sources and hasattr(response, 'source_nodes') and response.source_nodes:
+                sources = []
+                for i, node in enumerate(response.source_nodes[:max_sources]):
+                    source_info = {
+                        "source_id": i + 1,
+                        "content_preview": node.text[:200] + "..." if len(node.text) > 200 else node.text,
+                        "similarity_score": getattr(node, 'score', None),
+                        "metadata": node.metadata if hasattr(node, 'metadata') else {}
+                    }
+                    sources.append(source_info)
+                
+                rag_response["sources"] = sources
+                rag_response["source_count"] = len(sources)
+                
+                logger.info(f"RAG query completed with {len(sources)} sources in {query_time:.3f}s")
+            else:
+                rag_response["sources"] = []
+                rag_response["source_count"] = 0
+                logger.info(f"RAG query completed without sources in {query_time:.3f}s")
+            
+            return jsonify(rag_response)
+            
+        except Exception as e:
+            logger.error(f"RAG query execution failed: {e}")
+            return jsonify({
+                "error": f"RAG query failed: {str(e)}",
+                "query": query,
+                "processing_time_ms": round((time.time() - start_time) * 1000, 2)
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/v1/rag-chat: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -3400,15 +3662,22 @@ if __name__ == '__main__':
     # Run Flask development server with auto-reload enabled
     # Flask's reloader automatically watches .py files and restarts when changes are detected
     import os
+    
+    # Configure Flask environment
     os.environ['FLASK_ENV'] = 'development'
+    os.environ['FLASK_DEBUG'] = '1'
+    
+    # Configure watchdog to ignore certain directories that cause unnecessary restarts
+    # Use PYTHONDONTWRITEBYTECODE to reduce .pyc file creation
+    os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
     
     print("🔄 Auto-reload enabled - Flask will restart when code changes are detected")
     print("💡 The server will automatically restart when you modify .py files")
-    print("📁 Flask watches Python files by default, ignoring non-Python files")
+    print("📁 Flask watches Python files by default, ignoring cache and venv changes")
     print("🚀 Use Ctrl+C to stop the server")
     
-    # Use Flask's built-in development server with reloader
-    # This is the recommended way per Flask documentation
+    # Use Flask's built-in development server
+    # Note: Flask's watchdog will still monitor venv, but we've minimized the triggers
     app.run(
         host='0.0.0.0',
         port=5001,
