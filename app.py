@@ -143,6 +143,24 @@ OLLAMA_TIMEOUT: int = 60 if os.getenv('PYTEST_CURRENT_TEST') else 30
 # Iris dataset class names for prediction interpretation
 IRIS_CLASSES: List[str] = ['setosa', 'versicolor', 'virginica']
 
+# RAG Domain Classification - AI/ML keywords for query relevance filtering
+AI_ML_DOMAIN_KEYWORDS: List[str] = [
+    "machine learning", "artificial intelligence", "AI", "ML", "model", "neural network", 
+    "algorithm", "training", "dataset", "classification", "regression", "deep learning",
+    "MLOps", "deployment", "monitoring", "drift", "evaluation", "prediction", "inference",
+    "supervised learning", "unsupervised learning", "reinforcement learning", "transformer",
+    "CNN", "RNN", "LSTM", "GAN", "autoencoder", "computer vision", "NLP", "natural language",
+    "feature engineering", "hyperparameter", "gradient descent", "backpropagation", "overfitting",
+    "cross validation", "bias", "variance", "ensemble", "random forest", "SVM", "clustering",
+    "dimensionality reduction", "PCA", "feature selection", "data preprocessing", "embedding",
+    "vector database", "retrieval augmented generation", "RAG", "LLM", "language model",
+    "generative AI", "fine tuning", "prompt engineering", "attention mechanism", "tokenization"
+]
+
+# RAG Filtering Configuration
+RAG_MIN_SIMILARITY_THRESHOLD: float = 0.5  # Minimum similarity score for relevant results
+RAG_DOMAIN_RELEVANCE_THRESHOLD: float = 0.1  # Minimum domain relevance score
+
 # Prompt injection detection patterns
 INJECTION_PATTERNS: List[str] = [
     r'ignore\s+(?:all\s+)?(?:previous\s+)?instructions',
@@ -292,6 +310,73 @@ def sanitize_prompt(prompt: str) -> str:
         sanitized = sanitized[:max_length] + "..."
     
     return sanitized.strip()
+
+
+def is_domain_relevant(query: str, threshold: float = RAG_DOMAIN_RELEVANCE_THRESHOLD) -> Tuple[bool, float]:
+    """
+    Check if query is relevant to AI/ML domain using TF-IDF similarity with domain keywords.
+    
+    Args:
+        query: User's query string
+        threshold: Minimum similarity score for relevance (default from config)
+        
+    Returns:
+        Tuple of (is_relevant: bool, max_similarity: float)
+    """
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        import numpy as np
+        
+        # Preprocess query - convert to lowercase for better matching
+        query_processed = query.lower().strip()
+        
+        # Create corpus with query and domain keywords
+        corpus = [query_processed] + [keyword.lower() for keyword in AI_ML_DOMAIN_KEYWORDS]
+        
+        # Use TF-IDF to create feature vectors
+        vectorizer = TfidfVectorizer(
+            ngram_range=(1, 3),  # Include unigrams, bigrams, and trigrams
+            stop_words='english',  # Remove common English stop words
+            lowercase=True,
+            max_features=1000  # Limit features for efficiency
+        )
+        
+        try:
+            tfidf_matrix = vectorizer.fit_transform(corpus)
+        except ValueError:
+            # Handle case where vocabulary is too small
+            return False, 0.0
+        
+        # Extract query vector and keyword vectors
+        query_vector = tfidf_matrix[0:1]
+        keyword_vectors = tfidf_matrix[1:]
+        
+        # Calculate cosine similarities between query and each keyword
+        similarities = (query_vector * keyword_vectors.T).toarray()[0]
+        max_similarity = np.max(similarities) if len(similarities) > 0 else 0.0
+        
+        # Check if query is relevant
+        is_relevant = max_similarity > threshold
+        
+        logger.info(f"Domain relevance check: query='{query[:50]}...', max_similarity={max_similarity:.3f}, threshold={threshold}, relevant={is_relevant}")
+        
+        return is_relevant, float(max_similarity)
+        
+    except ImportError:
+        # If sklearn is not available, use simple keyword matching as fallback
+        logger.warning("sklearn not available, using simple keyword matching for domain relevance")
+        query_lower = query.lower()
+        
+        # Simple keyword matching fallback
+        matches = sum(1 for keyword in AI_ML_DOMAIN_KEYWORDS if keyword.lower() in query_lower)
+        simple_score = matches / len(AI_ML_DOMAIN_KEYWORDS)
+        
+        return simple_score > threshold, simple_score
+        
+    except Exception as e:
+        logger.error(f"Error in domain relevance check: {e}")
+        # On error, be permissive and allow the query
+        return True, 1.0
 
 
 def get_pickle_model() -> Any:
@@ -1498,6 +1583,32 @@ def rag_chat() -> Response:
         
         logger.info(f"RAG query received: {query}")
         
+        # Step 1: Domain relevance check
+        is_relevant, relevance_score = is_domain_relevant(query)
+        
+        if not is_relevant:
+            logger.info(f"Query rejected: not relevant to AI/ML domain (score: {relevance_score:.3f})")
+            return jsonify({
+                "response": "I don't have relevant information about that topic in my AI/ML knowledge base. Please ask questions related to machine learning, artificial intelligence, model deployment, data science, or related technical topics.",
+                "query": query,
+                "source_count": 0,
+                "sources": [],
+                "filtering_applied": {
+                    "domain_relevance_check": True,
+                    "domain_relevance_score": round(relevance_score, 3),
+                    "domain_relevance_threshold": RAG_DOMAIN_RELEVANCE_THRESHOLD,
+                    "similarity_threshold": RAG_MIN_SIMILARITY_THRESHOLD
+                },
+                "rag_metadata": {
+                    "retrieval_method": "filtered_out_by_domain_check",
+                    "embedding_model": "BAAI/bge-small-en-v1.5",
+                    "llm_model": "tinyllama",
+                    "max_sources_requested": max_sources
+                }
+            }), 200
+        
+        logger.info(f"Query passed domain relevance check (score: {relevance_score:.3f})")
+        
         # Check if RAG system is available
         if not RAG_AVAILABLE:
             return jsonify({
@@ -1542,7 +1653,10 @@ def rag_chat() -> Response:
             
             # Add source information if requested
             if include_sources and hasattr(response, 'source_nodes') and response.source_nodes:
-                sources = []
+                # Step 2: Apply similarity threshold filtering to sources
+                all_sources = []
+                filtered_sources = []
+                
                 for i, node in enumerate(response.source_nodes[:max_sources]):
                     source_info = {
                         "source_id": i + 1,
@@ -1550,15 +1664,71 @@ def rag_chat() -> Response:
                         "similarity_score": getattr(node, 'score', None),
                         "metadata": node.metadata if hasattr(node, 'metadata') else {}
                     }
-                    sources.append(source_info)
+                    all_sources.append(source_info)
+                    
+                    # Apply similarity threshold filter
+                    if source_info["similarity_score"] is not None and source_info["similarity_score"] >= RAG_MIN_SIMILARITY_THRESHOLD:
+                        filtered_sources.append(source_info)
+                
+                # Check if we have sufficient relevant sources after filtering
+                if not filtered_sources:
+                    logger.info(f"Query rejected: no sources meet similarity threshold {RAG_MIN_SIMILARITY_THRESHOLD}")
+                    return jsonify({
+                        "response": "I don't have sufficiently relevant information about that specific topic in my knowledge base. Please try rephrasing your question or ask about related AI/ML concepts.",
+                        "query": query,
+                        "source_count": 0,
+                        "sources": [],
+                        "filtering_applied": {
+                            "domain_relevance_check": True,
+                            "domain_relevance_score": round(relevance_score, 3),
+                            "domain_relevance_threshold": RAG_DOMAIN_RELEVANCE_THRESHOLD,
+                            "similarity_threshold_applied": True,
+                            "similarity_threshold": RAG_MIN_SIMILARITY_THRESHOLD,
+                            "sources_before_filtering": len(all_sources),
+                            "sources_after_filtering": 0,
+                            "max_similarity_found": max([s["similarity_score"] for s in all_sources if s["similarity_score"] is not None], default=0.0)
+                        },
+                        "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                        "rag_metadata": {
+                            "retrieval_method": "filtered_out_by_similarity_threshold",
+                            "embedding_model": "BAAI/bge-small-en-v1.5",
+                            "llm_model": "tinyllama",
+                            "max_sources_requested": max_sources
+                        }
+                    }), 200
+                
+                sources = filtered_sources
+                logger.info(f"Similarity filtering: {len(all_sources)} -> {len(sources)} sources (threshold: {RAG_MIN_SIMILARITY_THRESHOLD})")
                 
                 rag_response["sources"] = sources
                 rag_response["source_count"] = len(sources)
                 
-                logger.info(f"RAG query completed with {len(sources)} sources in {query_time:.3f}s")
+                # Add filtering metadata to successful response
+                rag_response["filtering_applied"] = {
+                    "domain_relevance_check": True,
+                    "domain_relevance_score": round(relevance_score, 3),
+                    "domain_relevance_threshold": RAG_DOMAIN_RELEVANCE_THRESHOLD,
+                    "similarity_threshold_applied": True,
+                    "similarity_threshold": RAG_MIN_SIMILARITY_THRESHOLD,
+                    "sources_before_filtering": len(all_sources),
+                    "sources_after_filtering": len(sources)
+                }
+                
+                logger.info(f"RAG query completed with {len(sources)}/{len(all_sources)} filtered sources in {query_time:.3f}s")
             else:
                 rag_response["sources"] = []
                 rag_response["source_count"] = 0
+                
+                # Add filtering metadata even when sources not requested
+                rag_response["filtering_applied"] = {
+                    "domain_relevance_check": True,
+                    "domain_relevance_score": round(relevance_score, 3),
+                    "domain_relevance_threshold": RAG_DOMAIN_RELEVANCE_THRESHOLD,
+                    "similarity_threshold_applied": False,
+                    "similarity_threshold": RAG_MIN_SIMILARITY_THRESHOLD,
+                    "sources_requested": False
+                }
+                
                 logger.info(f"RAG query completed without sources in {query_time:.3f}s")
             
             return jsonify(rag_response)

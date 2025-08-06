@@ -969,6 +969,68 @@ curl -X POST http://localhost:5001/api/v1/rag-chat \
   -d '{"query": "How does Retrieval-Augmented Generation work?"}'
 ```
 
+#### RAG Filtering Examples
+
+The RAG system includes intelligent filtering to prevent irrelevant queries and low-quality responses:
+
+**Domain Relevance Filtering** - Rejects queries outside AI/ML domain:
+
+```bash
+# ❌ Out of domain query - gets filtered out
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is a kangaroo?"}'
+
+# Response:
+{
+  "filtering_applied": {
+    "domain_relevance_check": true,
+    "domain_relevance_score": 0.0,
+    "domain_relevance_threshold": 0.1,
+    "similarity_threshold": 0.5
+  },
+  "query": "What is a kangaroo?",
+  "rag_metadata": {
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "llm_model": "tinyllama",
+    "max_sources_requested": 5,
+    "retrieval_method": "filtered_out_by_domain_check"
+  },
+  "response": "I don't have relevant information about that topic in my AI/ML knowledge base. Please ask questions related to machine learning, artificial intelligence, model deployment, data science, or related technical topics.",
+  "source_count": 0,
+  "sources": []
+}
+```
+
+**Similarity Threshold Filtering** - Filters out low-relevance sources (< 0.5 similarity score):
+
+```bash
+# ✅ Valid AI/ML query - passes both filters
+curl -X POST http://localhost:5001/api/v1/rag-chat \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is model drift and how do you monitor it?"}'
+
+# Response includes filtering metadata:
+{
+  "filtering_applied": {
+    "domain_relevance_check": true,
+    "domain_relevance_score": 0.892,
+    "domain_relevance_threshold": 0.1,
+    "similarity_threshold_applied": true,
+    "similarity_threshold": 0.5,
+    "sources_before_filtering": 5,
+    "sources_after_filtering": 2
+  },
+  "response": "Model drift refers to...",
+  "sources": [
+    {
+      "similarity_score": 0.5255,
+      "content_preview": "Performance monitoring includes model accuracy tracking..."
+    }
+  ]
+}
+```
+
 ## 🔄 Batch Processing
 
 ### Create Sample Files
